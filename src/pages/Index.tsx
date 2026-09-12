@@ -51,6 +51,7 @@ import {
 } from "@/lib/repair-jobs";
 import {
   isAuthorizedDemoAttempt,
+  isNonTerminalCallStatus,
   loadCallAttemptDraft,
   saveCallAttemptDraft,
   type CallAttemptDraft,
@@ -85,6 +86,8 @@ const EMPTY_QUEUE_SUMMARY: ReadinessQueueSummary = {
   needsFollowUpCount: 0,
   blockedCount: 0,
   unreviewedCount: 0,
+  confirmedEvidenceCount: 0,
+  totalEvidenceAreaCount: 0,
   limitedToNewestRecords: false,
 };
 
@@ -509,11 +512,12 @@ const Index = () => {
     }
   };
 
-  const handleRefreshDemoStatus = async () => {
+  const handleRefreshDemoStatus = async (auto = false) => {
     const target = selected;
     const attempt = callDraft;
     if (demoStatusRefreshing) return;
     if (!target || !attempt || attempt.approval_state !== "approved" || !attempt.provider_call_id?.trim()) {
+      if (auto) return;
       const message = "Manual status refresh is available only for an approved call after a provider call ID is saved.";
       setDemoStatusMessage(message);
       toast({ title: "Status refresh unavailable", description: message, variant: "destructive" });
@@ -521,22 +525,27 @@ const Index = () => {
     }
 
     setDemoStatusRefreshing(true);
-    setDemoStatusMessage("Reading the approved demo status once…");
+    setDemoStatusMessage(auto ? "Checking on the call…" : "Reading the approved call status once…");
     try {
       const result = await getCalleCallStatus({ call_attempt_id: attempt.id });
       setDemoStatusMessage(result.message);
-      toast({
-        title: result.status === "status" ? "Demo status refreshed" : "Demo status needs review",
-        description: result.message,
-        variant: result.status === "status" ? "default" : "destructive",
-      });
+      // Auto-polling only announces the result once the call reaches a terminal status, so it
+      // doesn't spam a toast every ~10s while the call is still ringing/in progress.
+      const stillInFlight = auto && isNonTerminalCallStatus(result.provider_status);
+      if (!stillInFlight) {
+        toast({
+          title: result.status === "status" ? "Call status updated" : "Call status needs review",
+          description: result.message,
+          variant: result.status === "status" ? "default" : "destructive",
+        });
+      }
     } catch (err) {
       const message = friendlyError(
         err,
-        "The demo status could not be refreshed. Review the private record and do not retry automatically."
+        "The call status could not be refreshed. Review the private record and do not retry automatically."
       );
       setDemoStatusMessage(message);
-      toast({ title: "Status refresh needs review", description: message, variant: "destructive" });
+      if (!auto) toast({ title: "Status refresh needs review", description: message, variant: "destructive" });
     } finally {
       try {
         const refreshedDraft = await loadCallAttemptDraft(target);
@@ -553,6 +562,17 @@ const Index = () => {
       setDemoStatusRefreshing(false);
     }
   };
+
+  // Auto-poll while a dispatched call is still in flight, matching CALL-E's own recommended
+  // polling cadence. Self-terminating: once the refreshed draft's status is no longer
+  // queued/in_progress, this effect's condition stops matching and no further poll is scheduled.
+  useEffect(() => {
+    if (!callDraft || demoStatusRefreshing) return;
+    if (callDraft.approval_state !== "approved" || !callDraft.provider_call_id?.trim()) return;
+    if (!isNonTerminalCallStatus(callDraft.provider_status)) return;
+    const timeoutId = setTimeout(() => { void handleRefreshDemoStatus(true); }, 10000);
+    return () => clearTimeout(timeoutId);
+  }, [callDraft, demoStatusRefreshing]);
 
   const handleApproveCall = async (confirmedPhone: string, region: string, locale: string) => {
     const target = selected;

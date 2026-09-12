@@ -4,6 +4,7 @@ import {
   type QueueCallAttemptSnapshot,
 } from "@/lib/call-attempts";
 import {
+  BRIEF_EVIDENCE_KEYS,
   buildBriefPreview,
   completionLabel,
   humanReviewLabel,
@@ -22,6 +23,7 @@ import {
 } from "@/lib/repair-jobs";
 
 export const READINESS_QUEUE_LIMIT = 200 as const;
+const BRIEF_EVIDENCE_AREA_COUNT = BRIEF_EVIDENCE_KEYS.length;
 
 const QUEUE_PHONE_RE = /(?:\+\d[\d\s().-]{6,}|\b\d(?:[\d\s().-]*\d){6,}\b)/g;
 const QUEUE_EMAIL_RE = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi;
@@ -88,6 +90,9 @@ export interface ReadinessQueueSummary {
   needsFollowUpCount: number;
   blockedCount: number;
   unreviewedCount: number;
+  /** Evidence areas confirmed by a call, summed across every loaded job (5 areas per job). */
+  confirmedEvidenceCount: number;
+  totalEvidenceAreaCount: number;
   limitedToNewestRecords: boolean;
 }
 
@@ -226,6 +231,8 @@ function emptySummary(jobs: RepairJobRecord[]): ReadinessQueueSummary {
     needsFollowUpCount: 0,
     blockedCount: 0,
     unreviewedCount: 0,
+    confirmedEvidenceCount: 0,
+    totalEvidenceAreaCount: jobs.length * BRIEF_EVIDENCE_AREA_COUNT,
     limitedToNewestRecords: jobs.length >= READINESS_QUEUE_LIMIT,
   };
 }
@@ -274,6 +281,8 @@ export async function loadReadinessQueue(
     needsFollowUpCount: items.filter((item) => item.readinessBucket === "needs_follow_up").length,
     blockedCount: items.filter((item) => item.readinessBucket === "blocked").length,
     unreviewedCount: items.filter((item) => item.humanReviewState === "not_reviewed").length,
+    confirmedEvidenceCount: items.reduce((sum, item) => sum + item.metrics.confirmedEvidenceAreas, 0),
+    totalEvidenceAreaCount: normalizedJobs.length * BRIEF_EVIDENCE_AREA_COUNT,
     limitedToNewestRecords:
       normalizedJobs.length >= READINESS_QUEUE_LIMIT ||
       (attemptRows as unknown[]).length >= READINESS_QUEUE_LIMIT ||

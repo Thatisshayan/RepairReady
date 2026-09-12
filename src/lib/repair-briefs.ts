@@ -11,7 +11,20 @@ export const BRIEF_EVIDENCE_KEYS = [
 export type EvidenceKey = (typeof BRIEF_EVIDENCE_KEYS)[number];
 export type EvidenceStatus = "confirmed" | "missing" | "uncertain" | "unverified";
 export type EvidenceSource = "coordinator" | "call_reported";
-export type CallCompletionStatus = "not_started" | "in_progress" | "completed" | "failed" | "canceled" | "unknown";
+export const CALL_COMPLETION_STATUSES = [
+  "not_started",
+  "in_progress",
+  "completed",
+  "failed",
+  "canceled",
+  "no_answer",
+  "declined",
+  "voicemail",
+  "busy",
+  "expired",
+  "unknown",
+] as const;
+export type CallCompletionStatus = (typeof CALL_COMPLETION_STATUSES)[number];
 export type ReadinessStatus = "blocked" | "needs_follow_up" | "unknown" | "ready_for_technician_review";
 export type HumanReviewState = "not_reviewed" | "reviewed" | "needs_follow_up";
 export type FollowUpReviewStatus = "open" | "reviewed";
@@ -99,8 +112,21 @@ export function evidenceSourceLabel(source: EvidenceSource | null): string {
 export function readinessLabel(status: ReadinessStatus): string {
   return status === "ready_for_technician_review" ? "Ready for technician review" : status === "needs_follow_up" ? "Needs follow-up" : status === "blocked" ? "Blocked" : "Unknown";
 }
+const COMPLETION_LABELS: Record<CallCompletionStatus, string> = {
+  not_started: "Not started",
+  in_progress: "In progress",
+  completed: "Completed",
+  failed: "Provider reported failure",
+  canceled: "Canceled",
+  no_answer: "No answer",
+  declined: "Declined",
+  voicemail: "Reached voicemail",
+  busy: "Line busy",
+  expired: "Attempt expired",
+  unknown: "Unknown",
+};
 export function completionLabel(status: CallCompletionStatus): string {
-  return status === "not_started" ? "Not started" : status === "in_progress" ? "In progress" : status === "completed" ? "Completed" : status === "failed" ? "Provider reported failure" : status === "canceled" ? "Canceled" : "Unknown";
+  return COMPLETION_LABELS[status] ?? "Unknown";
 }
 export function humanReviewLabel(state: HumanReviewState): string {
   return state === "reviewed" ? "Reviewed" : state === "needs_follow_up" ? "Follow-up noted" : "Not reviewed";
@@ -180,6 +206,11 @@ export function readinessDecisionFor(brief: RepairBriefView): ReadinessDecision 
       completed: "The call is marked complete, but no call-reported evidence is saved. Coordinator entries remain preparation only.",
       failed: "The provider reported a failed call, and no call-reported evidence is saved. Coordinator entries remain preparation only.",
       canceled: "The call was canceled, and no call-reported evidence is saved. Coordinator entries remain preparation only.",
+      no_answer: "The participant did not answer, and no call-reported evidence is saved. Coordinator entries remain preparation only.",
+      declined: "The participant declined the call, and no call-reported evidence is saved. Coordinator entries remain preparation only.",
+      voicemail: "The call reached voicemail, and no call-reported evidence is saved. Coordinator entries remain preparation only.",
+      busy: "The line was busy, and no call-reported evidence is saved. Coordinator entries remain preparation only.",
+      expired: "The call attempt expired before connecting, and no call-reported evidence is saved. Coordinator entries remain preparation only.",
       unknown: "No call-reported evidence is saved, and the call outcome is unavailable. Coordinator entries remain preparation only.",
     };
     const nextActionByCompletion: Record<CallCompletionStatus, string> = {
@@ -188,6 +219,11 @@ export function readinessDecisionFor(brief: RepairBriefView): ReadinessDecision 
       completed: "Review the saved call outcome. If evidence is missing, investigate the result before making a readiness decision.",
       failed: "Review the call outcome. Use the existing consent flow only if a new authorized attempt is appropriate.",
       canceled: "Review why the call was canceled. Use the existing consent flow only if a new authorized attempt is appropriate.",
+      no_answer: "Confirm the number and timing, then approve a new attempt only if appropriate.",
+      declined: "Respect the decline. Do not approve a new attempt to the same number without a clear reason to try again.",
+      voicemail: "Decide whether to leave the follow-up to the coordinator, or approve a new attempt at a different time.",
+      busy: "Approve a new attempt later if appropriate; the line was busy, not unreachable.",
+      expired: "Review why the attempt expired, then approve a new attempt only if appropriate.",
       unknown: "Review the call attempt status before deciding whether the existing consent flow should be used.",
     };
     return {
@@ -430,7 +466,7 @@ export function assessReadiness(evidence: EvidenceItem[], blockers: BriefBlocker
 
 export function callCompletionFromAttempt(attempt?: { provider_status?: string | null } | null): CallCompletionStatus {
   if (attempt?.provider_status === "queued") return "in_progress";
-  return normalizeEnum(attempt?.provider_status, ["not_started", "in_progress", "completed", "failed", "canceled", "unknown"] as const, "not_started");
+  return normalizeEnum(attempt?.provider_status, CALL_COMPLETION_STATUSES, "not_started");
 }
 export function adaptiveQuestionsForJob(job: RepairJobRecord): string[] {
   const questions = ["Confirm you are speaking with the intended customer and that they agree to a short preparation conversation. Do not ask for passwords or access codes."];
@@ -461,7 +497,7 @@ function normalizeReviewState(value: unknown): HumanReviewState {
   return normalizeEnum(value, ["not_reviewed", "reviewed", "needs_follow_up"] as const, "not_reviewed");
 }
 function normalizeCompletion(value: unknown, fallback: CallCompletionStatus): CallCompletionStatus {
-  return normalizeEnum(value, ["not_started", "in_progress", "completed", "failed", "canceled", "unknown"] as const, fallback);
+  return normalizeEnum(value, CALL_COMPLETION_STATUSES, fallback);
 }
 function normalizeStored(raw: RepairBriefRecordLike, job: RepairJobRecord, attempt?: { id?: string; provider_status?: string | null } | null): RepairBriefView {
   const local = localEvidence(job);

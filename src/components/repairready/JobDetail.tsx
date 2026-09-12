@@ -241,6 +241,9 @@ export function JobDetail({
             dispatchState={dispatchState}
             dispatchMessage={dispatchMessage}
             onDispatchCall={onDispatchCall}
+            statusRefreshing={demoStatusRefreshing}
+            statusMessage={demoStatusMessage}
+            onRefreshStatus={onRefreshDemoStatus}
           />
 
           <TechnicianBrief
@@ -553,6 +556,9 @@ function CallReviewPanel({
   dispatchState,
   dispatchMessage,
   onDispatchCall,
+  statusRefreshing,
+  statusMessage,
+  onRefreshStatus,
 }: {
   job: RepairJobRecord;
   connectionState: ConnectionState;
@@ -569,6 +575,9 @@ function CallReviewPanel({
   dispatchState: "idle" | "loading" | "submitted" | "error";
   dispatchMessage: string;
   onDispatchCall: () => Promise<void>;
+  statusRefreshing: boolean;
+  statusMessage: string;
+  onRefreshStatus: () => Promise<void>;
 }) {
   const [reviewed, setReviewed] = useState(false);
   const [confirmPhone, setConfirmPhone] = useState("");
@@ -787,6 +796,9 @@ function CallReviewPanel({
           dispatchState={dispatchState}
           dispatchMessage={dispatchMessage}
           onDispatchCall={onDispatchCall}
+          statusRefreshing={statusRefreshing}
+          statusMessage={statusMessage}
+          onRefreshStatus={onRefreshStatus}
         />
       )}
     </section>
@@ -809,6 +821,9 @@ function ApproveAndCallPanel({
   dispatchState,
   dispatchMessage,
   onDispatchCall,
+  statusRefreshing,
+  statusMessage,
+  onRefreshStatus,
 }: {
   callDraft: CallAttemptDraft;
   confirmPhone: string;
@@ -825,6 +840,9 @@ function ApproveAndCallPanel({
   dispatchState: "idle" | "loading" | "submitted" | "error";
   dispatchMessage: string;
   onDispatchCall: () => Promise<void>;
+  statusRefreshing: boolean;
+  statusMessage: string;
+  onRefreshStatus: () => Promise<void>;
 }) {
   const isApproved =
     callDraft.approval_state === "approved" &&
@@ -832,17 +850,44 @@ function ApproveAndCallPanel({
     Date.parse(callDraft.approval_expires_at as string) > Date.now();
   const alreadySubmitted = Boolean(callDraft.provider_call_id?.trim() || callDraft.provider_status?.trim());
   const last4 = callDraft.recipient_phone?.trim().slice(-4) ?? "";
+  const isInFlight = callDraft.provider_status === "queued" || callDraft.provider_status === "in_progress";
 
   if (alreadySubmitted) {
     return (
       <div className="mt-4 rounded-lg border border-primary/20 bg-primary/5 p-3.5 sm:p-4">
         <div className="flex items-start gap-2.5">
-          <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-primary" aria-hidden />
-          <p className="text-xs leading-relaxed text-foreground/90">
-            This draft already has saved provider state ({callDraft.provider_status || "submitted"}). Review it
-            in the panel above rather than approving or dispatching again.
-          </p>
+          {isInFlight ? (
+            <RefreshCw className="mt-0.5 h-4 w-4 shrink-0 animate-spin text-primary" aria-hidden />
+          ) : (
+            <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-primary" aria-hidden />
+          )}
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-semibold text-foreground">
+              {remoteStatusText(callDraft.provider_status || "submitted")}
+            </p>
+            <p className="mt-1 text-xs leading-relaxed text-foreground/90">
+              {isInFlight
+                ? "Checking automatically every ~10 seconds while the call is in progress, matching CALL-E's own recommended polling pattern."
+                : "This draft has saved provider state. Review it in the panel above rather than approving or dispatching again."}
+            </p>
+          </div>
         </div>
+        {statusMessage && (
+          <p className="mt-2 border-t border-primary/10 pt-2 text-xs leading-relaxed text-foreground" role="status">
+            {statusMessage}
+          </p>
+        )}
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={() => void onRefreshStatus()}
+          disabled={statusRefreshing}
+          className="mt-3 border-primary/25 bg-card text-primary hover:bg-primary/10 hover:text-primary"
+        >
+          <RefreshCw className={cn("mr-1.5 h-3.5 w-3.5", statusRefreshing && "animate-spin")} aria-hidden />
+          {statusRefreshing ? "Checking…" : "Check status now"}
+        </Button>
       </div>
     );
   }
@@ -974,8 +1019,11 @@ function ApproveAndCallPanel({
 }
 
 function remoteStatusText(status: string): string {
-  if (status === "in_progress") return "In progress";
-  return status.slice(0, 1).toUpperCase() + status.slice(1);
+  return status
+    .split("_")
+    .filter(Boolean)
+    .map((word) => word.slice(0, 1).toUpperCase() + word.slice(1))
+    .join(" ");
 }
 
 function ConnectionCard({

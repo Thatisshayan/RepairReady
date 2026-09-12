@@ -9,9 +9,19 @@ export const REMOTE_CALL_STATUSES = [
   "completed",
   "failed",
   "canceled",
+  "no_answer",
+  "declined",
+  "voicemail",
+  "busy",
+  "expired",
 ] as const;
 
 export type RemoteCallStatus = (typeof REMOTE_CALL_STATUSES)[number];
+const NON_TERMINAL_REMOTE_STATUSES = ["queued", "in_progress"] as const;
+/** True while a call is still in flight — used to decide whether to keep auto-polling status. */
+export function isNonTerminalCallStatus(status: unknown): status is "queued" | "in_progress" {
+  return typeof status === "string" && (NON_TERMINAL_REMOTE_STATUSES as readonly string[]).includes(status);
+}
 export type LocalCallAttemptStatus = "prepared" | "submitting";
 export type CallAttemptLifecycleStatus = LocalCallAttemptStatus | RemoteCallStatus;
 export type CallAttemptApprovalState = "not_approved" | "approved";

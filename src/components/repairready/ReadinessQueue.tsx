@@ -111,6 +111,17 @@ export function ReadinessQueue({
           <SummaryCount label="Blocked" count={summary.blockedCount} tone="blocked" />
           <SummaryCount label="Unreviewed" count={summary.unreviewedCount} tone="review" />
         </div>
+        {summary.totalEvidenceAreaCount > 0 && (
+          <div className="rr-evidence-stat rounded-lg border border-primary/20 bg-primary/5 px-3 py-2.5">
+            <p className="font-mono text-[10px] uppercase tracking-[0.14em] text-primary">
+              Call-confirmed evidence
+            </p>
+            <p className="mt-1 text-sm font-semibold text-foreground">
+              {summary.confirmedEvidenceCount} of {summary.totalEvidenceAreaCount} evidence areas confirmed by a
+              real call
+            </p>
+          </div>
+        )}
         <p className="text-[10px] leading-relaxed text-muted-foreground">
           Unreviewed is a human-review filter, not a readiness state. {newestBoundaryNote}.
         </p>
