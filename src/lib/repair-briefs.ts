@@ -1,0 +1,567 @@
+import { CallAttempt, RepairBrief } from "@/entities";
+import { applianceLabel, type RepairJobRecord } from "@/lib/repair-jobs";
+
+export const BRIEF_EVIDENCE_KEYS = [
+  "appliance_identity",
+  "symptoms",
+  "timing",
+  "error_code",
+  "visit_logistics",
+] as const;
+export type EvidenceKey = (typeof BRIEF_EVIDENCE_KEYS)[number];
+export type EvidenceStatus = "confirmed" | "missing" | "uncertain" | "unverified";
+export type EvidenceSource = "coordinator" | "call_reported";
+export type CallCompletionStatus = "not_started" | "in_progress" | "completed" | "failed" | "canceled" | "unknown";
+export type ReadinessStatus = "blocked" | "needs_follow_up" | "unknown" | "ready_for_technician_review";
+export type HumanReviewState = "not_reviewed" | "reviewed" | "needs_follow_up";
+export type FollowUpReviewStatus = "open" | "reviewed";
+
+export interface EvidenceItem {
+  key: EvidenceKey;
+  label: string;
+  status: EvidenceStatus;
+  source: EvidenceSource | null;
+  value: string | null;
+  supporting_excerpt: string | null;
+}
+export interface BriefBlocker {
+  value: string;
+  source: EvidenceSource;
+  supporting_excerpt: string | null;
+}
+export interface BriefFollowUp {
+  key: string;
+  value: string;
+  source: "call_reported";
+}
+export interface FollowUpReview {
+  key: string;
+  value: string;
+  status: FollowUpReviewStatus;
+  note: string;
+}
+export interface RepairBriefView {
+  id?: string;
+  repair_job_id: string;
+  call_attempt_id: string;
+  call_completion_status: CallCompletionStatus;
+  readiness_status: ReadinessStatus;
+  human_review_state: HumanReviewState;
+  human_review_note: string;
+  reviewed_at: string;
+  evidence: EvidenceItem[];
+  follow_ups: BriefFollowUp[];
+  follow_up_reviews: FollowUpReview[];
+  blockers: BriefBlocker[];
+  safe_summary: string;
+  updated_at?: string;
+  updated_date?: string;
+}
+
+const LABELS: Record<EvidenceKey, string> = {
+  appliance_identity: "Appliance brand and model",
+  symptoms: "Symptoms in the customer's own words",
+  timing: "When the symptom occurs",
+  error_code: "Error code or explicit none",
+  visit_logistics: "Access, parking, pets, and workspace",
+};
+const LIMITS = { id: 160, evidence: 420, followUp: 180, followUps: 8, followUpJson: 4000, followUpReviewJson: 5000, followUpReviewNote: 240, excerpt: 280, note: 600, summary: 7000 } as const;
+const SENSITIVE_RE = /(?:alarm|security|door|entry|access|gate|building|lock)\s*(?:code|pin|password|passcode)|password|credential/i;
+const PHONE_RE = /(?:\+\d[\d\s().-]{6,}|\b\d(?:[\d\s().-]*\d){6,}\b)/g;
+
+function text(value: unknown, max: number): string {
+  return typeof value === "string" ? value.replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, max) : "";
+}
+function safeBriefText(value: unknown, max: number): string {
+  const result = text(value, max);
+  return SENSITIVE_RE.test(result) ? "" : result.replace(PHONE_RE, "[phone omitted]");
+}
+function safeExcerpt(value: unknown): string {
+  return safeBriefText(value, LIMITS.excerpt).replace(PHONE_RE, "[phone omitted]");
+}
+export function sanitizeFollowUpReviewNote(value: unknown): string {
+  return safeBriefText(value, LIMITS.followUpReviewNote);
+}
+function normalizeEnum<T extends string>(value: unknown, allowed: readonly T[], fallback: T): T {
+  return typeof value === "string" && (allowed as readonly string[]).includes(value) ? (value as T) : fallback;
+}
+function followUpKey(value: string): string {
+  const normalized = value.normalize("NFKC").toLowerCase().trim();
+  return normalized.replace(/[^\p{L}\p{N}]+/gu, "-").replace(/^-+|-+$/g, "").slice(0, 80) || "follow-up";
+}
+
+export function evidenceStatusLabel(status: EvidenceStatus): string {
+  return status === "confirmed" ? "Confirmed" : status === "unverified" ? "Unverified" : status === "uncertain" ? "Uncertain" : "Missing";
+}
+export function evidenceSourceLabel(source: EvidenceSource | null): string {
+  return source === "call_reported" ? "Call evidence" : source === "coordinator" ? "Coordinator entry" : "No source yet";
+}
+export function readinessLabel(status: ReadinessStatus): string {
+  return status === "ready_for_technician_review" ? "Ready for technician review" : status === "needs_follow_up" ? "Needs follow-up" : status === "blocked" ? "Blocked" : "Unknown";
+}
+export function completionLabel(status: CallCompletionStatus): string {
+  return status === "not_started" ? "Not started" : status === "in_progress" ? "In progress" : status === "completed" ? "Completed" : status === "failed" ? "Provider reported failure" : status === "canceled" ? "Canceled" : "Unknown";
+}
+export function humanReviewLabel(state: HumanReviewState): string {
+  return state === "reviewed" ? "Reviewed" : state === "needs_follow_up" ? "Follow-up noted" : "Not reviewed";
+}
+export function followUpReviewLabel(status: FollowUpReviewStatus): string {
+  return status === "reviewed" ? "Reviewed" : "Open";
+}
+
+export interface ReadinessMetrics {
+  confirmedEvidenceAreas: number;
+  followUpDetails: number;
+  visitBlockers: number;
+  callEvidenceAreas: number;
+  incompleteEvidenceAreas: number;
+}
+
+export type ReadinessDecisionState =
+  | "no_call_evidence"
+  | "blocked"
+  | "needs_follow_up"
+  | "ready_for_technician_review"
+  | "evidence_incomplete";
+export type ReadinessDecisionTone = "good" | "attention" | "blocked" | "neutral";
+
+export interface ReadinessDecision {
+  state: ReadinessDecisionState;
+  tone: ReadinessDecisionTone;
+  title: string;
+  explanation: string;
+  nextAction: string;
+  reviewPending: boolean;
+  reviewMessage: string | null;
+}
+
+export function readinessMetricsFor(brief: Pick<RepairBriefView, "evidence" | "follow_ups" | "blockers">): ReadinessMetrics {
+  return {
+    confirmedEvidenceAreas: brief.evidence.filter((item) => item.status === "confirmed").length,
+    followUpDetails: brief.follow_ups.length,
+    visitBlockers: brief.blockers.length,
+    callEvidenceAreas: brief.evidence.filter((item) => item.source === "call_reported").length,
+    incompleteEvidenceAreas: brief.evidence.filter((item) => item.status === "missing" || item.status === "uncertain").length,
+  };
+}
+
+function countLabel(count: number, singular: string, plural = `${singular}s`): string {
+  return `${count} ${count === 1 ? singular : plural}`;
+}
+
+export function readinessDecisionFor(brief: RepairBriefView): ReadinessDecision {
+  const metrics = readinessMetricsFor(brief);
+  const reviewPending = brief.human_review_state === "not_reviewed";
+  const reviewMessage = reviewPending
+    ? "Human review is still pending. Record a review state below to capture coordinator attention. This does not change call evidence or readiness."
+    : null;
+
+  if (metrics.visitBlockers > 0 || brief.readiness_status === "blocked") {
+    const hasBlockerDetail = metrics.visitBlockers > 0;
+    return {
+      state: "blocked",
+      tone: "blocked",
+      title: "Blocked",
+      explanation: hasBlockerDetail
+        ? "An explicit visit blocker is recorded in this brief. The blocker stays separate from follow-up details and needs review before any next step."
+        : "The saved brief is marked blocked, but no blocker detail is available to display.",
+      nextAction: hasBlockerDetail
+        ? "Resolve the explicit blocker and reassess the brief. Follow-up review does not confirm a customer answer."
+        : "Review the saved brief and its source details before moving forward.",
+      reviewPending,
+      reviewMessage,
+    };
+  }
+
+  if (metrics.callEvidenceAreas === 0) {
+    const explanationByCompletion: Record<CallCompletionStatus, string> = {
+      not_started: "The private brief contains coordinator entries for preparation, but no separately authorized call evidence has been received.",
+      in_progress: "The call is still in progress, and no call-reported evidence is saved yet. Coordinator entries remain preparation only.",
+      completed: "The call is marked complete, but no call-reported evidence is saved. Coordinator entries remain preparation only.",
+      failed: "The provider reported a failed call, and no call-reported evidence is saved. Coordinator entries remain preparation only.",
+      canceled: "The call was canceled, and no call-reported evidence is saved. Coordinator entries remain preparation only.",
+      unknown: "No call-reported evidence is saved, and the call outcome is unavailable. Coordinator entries remain preparation only.",
+    };
+    const nextActionByCompletion: Record<CallCompletionStatus, string> = {
+      not_started: "Complete the consented call flow, then review the returned evidence.",
+      in_progress: "Wait for a returned call result, then review the evidence and any follow-up details.",
+      completed: "Review the saved call outcome. If evidence is missing, investigate the result before making a readiness decision.",
+      failed: "Review the call outcome. Use the existing consent flow only if a new authorized attempt is appropriate.",
+      canceled: "Review why the call was canceled. Use the existing consent flow only if a new authorized attempt is appropriate.",
+      unknown: "Review the call attempt status before deciding whether the existing consent flow should be used.",
+    };
+    return {
+      state: "no_call_evidence",
+      tone: "attention",
+      title: "No call evidence yet",
+      explanation: explanationByCompletion[brief.call_completion_status],
+      nextAction: nextActionByCompletion[brief.call_completion_status],
+      reviewPending,
+      reviewMessage,
+    };
+  }
+
+  if (brief.readiness_status === "needs_follow_up" || metrics.followUpDetails > 0 || metrics.incompleteEvidenceAreas > 0) {
+    const followUpSentence = metrics.followUpDetails > 0
+      ? `${countLabel(metrics.followUpDetails, "follow-up detail")} ${metrics.followUpDetails === 1 ? "remains" : "remain"} open from the call.`
+      : "No specific follow-up detail was recorded from the call.";
+    const evidenceSentence = metrics.incompleteEvidenceAreas > 0
+      ? `${countLabel(metrics.incompleteEvidenceAreas, "evidence area")} ${metrics.incompleteEvidenceAreas === 1 ? "is" : "are"} missing or uncertain.`
+      : "The required evidence areas do not all support a ready decision yet.";
+    return {
+      state: "needs_follow_up",
+      tone: "attention",
+      title: "Needs follow-up",
+      explanation: `Call evidence is present. ${followUpSentence} ${evidenceSentence} Keep these gaps visible until the underlying details are independently confirmed.`,
+      nextAction: "Review each open detail and resolve missing or uncertain evidence before using the brief for technician review.",
+      reviewPending,
+      reviewMessage,
+    };
+  }
+
+  if (brief.readiness_status === "ready_for_technician_review") {
+    return {
+      state: "ready_for_technician_review",
+      tone: "good",
+      title: "Ready for technician review",
+      explanation: "Every required evidence area is confirmed by call evidence, and no explicit visit blocker is recorded. This is a review decision, not a booking, diagnosis, or guarantee that the visit can proceed.",
+      nextAction: reviewPending
+        ? "Complete the human review before handing this brief to the next person. No appointment is booked by this workspace."
+        : "Use this brief for technician review. No appointment is booked by this workspace.",
+      reviewPending,
+      reviewMessage,
+    };
+  }
+
+  return {
+    state: "evidence_incomplete",
+    tone: "neutral",
+    title: "Evidence still incomplete",
+    explanation: "Call evidence is present, but the brief has not reached a complete readiness state. Unknown or unverified areas remain visible for review.",
+    nextAction: "Review call completion and each evidence area before deciding what to do next.",
+    reviewPending,
+    reviewMessage,
+  };
+}
+
+export type DemoFlowStageKey = "preparation" | "call_evidence" | "readiness" | "human_review";
+export type DemoFlowStageState = "complete" | "current" | "attention" | "blocked" | "pending";
+export interface DemoFlowStage {
+  key: DemoFlowStageKey;
+  label: string;
+  status: string;
+  detail: string;
+  state: DemoFlowStageState;
+}
+
+export function demoFlowFor(brief: RepairBriefView): DemoFlowStage[] {
+  const metrics = readinessMetricsFor(brief);
+  const decision = readinessDecisionFor(brief);
+  const callEvidenceStage: DemoFlowStage = metrics.callEvidenceAreas > 0
+    ? {
+        key: "call_evidence",
+        label: "Call evidence",
+        status: "Received",
+        detail: `Call evidence is saved for ${countLabel(metrics.callEvidenceAreas, "evidence area")}.`,
+        state: "complete",
+      }
+    : {
+        key: "call_evidence",
+        label: "Call evidence",
+        status: "Awaiting evidence",
+        detail: brief.call_completion_status === "in_progress"
+          ? "The call is in progress. No call evidence is saved yet."
+          : "No call-reported evidence is saved yet.",
+        state: brief.call_completion_status === "in_progress" ? "current" : "pending",
+      };
+  const readinessStage: DemoFlowStage = {
+    key: "readiness",
+    label: "Readiness decision",
+    status: "Available",
+    detail: `${decision.title} is calculated from the saved brief.`,
+    state: decision.state === "blocked" ? "blocked" : decision.state === "ready_for_technician_review" ? "complete" : "current",
+  };
+  const reviewStage: DemoFlowStage = metrics.followUpDetails > 0 || brief.human_review_state === "needs_follow_up"
+    ? {
+        key: "human_review",
+        label: "Human review",
+        status: "Follow-up active",
+        detail: metrics.followUpDetails > 0
+          ? `${countLabel(metrics.followUpDetails, "reported detail")} ${metrics.followUpDetails === 1 ? "is" : "are"} in the review list.`
+          : "Coordinator review marked follow-up.",
+        state: "attention",
+      }
+    : brief.human_review_state === "reviewed"
+      ? {
+          key: "human_review",
+          label: "Human review",
+          status: "Review recorded",
+          detail: "Coordinator review is saved without changing evidence or readiness.",
+          state: "complete",
+        }
+      : {
+          key: "human_review",
+          label: "Human review",
+          status: "Pending",
+          detail: "Human review has not been saved yet.",
+          state: "pending",
+        };
+
+  return [
+    {
+      key: "preparation",
+      label: "Preparation",
+      status: "Ready",
+      detail: "The private brief is loaded.",
+      state: "complete",
+    },
+    callEvidenceStage,
+    readinessStage,
+    reviewStage,
+  ];
+}
+
+function emptyEvidence(key: EvidenceKey): EvidenceItem {
+  return { key, label: LABELS[key], status: "missing", source: null, value: null, supporting_excerpt: null };
+}
+function sanitizeEvidenceItem(raw: unknown, key: EvidenceKey, forcedSource?: EvidenceSource): EvidenceItem {
+  const item = raw && typeof raw === "object" && !Array.isArray(raw) ? raw as Record<string, unknown> : {};
+  const source = forcedSource ?? (item.source === "call_reported" ? "call_reported" : "coordinator");
+  const value = safeBriefText(item.value, LIMITS.evidence);
+  const excerpt = safeExcerpt(item.supporting_excerpt) || null;
+  if (source === "coordinator") {
+    return { key, label: LABELS[key], status: value ? "unverified" : "missing", source: value ? "coordinator" : null, value: value || null, supporting_excerpt: null };
+  }
+  const supplied = normalizeEnum(item.status, ["confirmed", "missing", "uncertain", "unverified"] as const, "uncertain");
+  return { key, label: LABELS[key], status: value ? supplied : "missing", source: "call_reported", value: value || null, supporting_excerpt: excerpt };
+}
+function parseStoredJson(value: unknown, max: number): unknown {
+  const serialized = text(value, max);
+  if (!serialized) return [];
+  try { return JSON.parse(serialized); } catch { return []; }
+}
+/** Only explicit call-reported rows from the persisted brief cross the review-save boundary. */
+function persistedCallReportedEvidence(raw: unknown): EvidenceItem[] {
+  const byKey = new Map<EvidenceKey, unknown>();
+  (Array.isArray(raw) ? raw : []).forEach((item) => {
+    const row = item && typeof item === "object" && !Array.isArray(item) ? item as Record<string, unknown> : null;
+    const key = row?.key;
+    if (row?.source === "call_reported" && typeof key === "string" && (BRIEF_EVIDENCE_KEYS as readonly string[]).includes(key)) byKey.set(key as EvidenceKey, item);
+  });
+  return BRIEF_EVIDENCE_KEYS.flatMap((key) => byKey.has(key) ? [sanitizeEvidenceItem(byKey.get(key), key, "call_reported")] : []);
+}
+function persistedCallReportedFollowUps(raw: unknown): BriefFollowUp[] {
+  const seen = new Set<string>();
+  return (Array.isArray(raw) ? raw : []).slice(0, LIMITS.followUps).flatMap((item) => {
+    const row = item && typeof item === "object" && !Array.isArray(item) ? item as Record<string, unknown> : null;
+    if (row?.source !== "call_reported") return [];
+    const value = safeBriefText(row.value, LIMITS.followUp);
+    const key = value ? followUpKey(value) : "";
+    if (!value || !key || seen.has(key)) return [];
+    seen.add(key);
+    return [{ key, value, source: "call_reported" as const }];
+  });
+}
+function validatedFollowUpReviews(raw: unknown, followUps: BriefFollowUp[]): FollowUpReview[] {
+  const current = new Map(followUps.map((item) => [item.key, item]));
+  const seen = new Set<string>();
+  return (Array.isArray(raw) ? raw : []).slice(0, LIMITS.followUps * 2).flatMap((item) => {
+    const row = item && typeof item === "object" && !Array.isArray(item) ? item as Record<string, unknown> : null;
+    const key = text(row?.key, 80);
+    const value = safeBriefText(row?.value, LIMITS.followUp);
+    const matching = current.get(key);
+    if (!matching || matching.value !== value || seen.has(key)) return [];
+    seen.add(key);
+    return [{ key, value: matching.value, status: normalizeEnum(row?.status, ["open", "reviewed"] as const, "open"), note: safeBriefText(row?.note, LIMITS.followUpReviewNote) }];
+  });
+}
+function normalizeFollowUpReviews(raw: unknown, followUps: BriefFollowUp[]): FollowUpReview[] {
+  const supplied = new Map(validatedFollowUpReviews(raw, followUps).map((item) => [item.key, item]));
+  return followUps.map((item) => supplied.get(item.key) ?? { key: item.key, value: item.value, status: "open" as const, note: "" });
+}
+function mergeFollowUpReviews(followUps: BriefFollowUp[], existingRaw: unknown, requestedRaw: unknown): FollowUpReview[] {
+  const merged = new Map(validatedFollowUpReviews(existingRaw, followUps).map((item) => [item.key, item]));
+  validatedFollowUpReviews(requestedRaw, followUps).forEach((item) => merged.set(item.key, item));
+  return normalizeFollowUpReviews(Array.from(merged.values()), followUps);
+}
+function localEvidence(job: RepairJobRecord): EvidenceItem[] {
+  const val = (v: unknown) => safeBriefText(v, LIMITS.evidence);
+  const values: Record<EvidenceKey, string> = {
+    appliance_identity: [val(job.brand), val(job.model)].filter(Boolean).join(" · "),
+    symptoms: val(job.reported_problem),
+    timing: val(job.symptom_timing),
+    error_code: val(job.error_code),
+    visit_logistics: val(job.access_notes),
+  };
+  return BRIEF_EVIDENCE_KEYS.map((key) => sanitizeEvidenceItem({ key, source: "coordinator", value: values[key] }, key));
+}
+/** Future CALL-E result boundary. Only explicitly call-reported items may be confirmed. */
+export function mergeCallReportedEvidence(base: EvidenceItem[], raw: unknown): EvidenceItem[] {
+  const next = new Map(base.map((item) => [item.key, item]));
+  const incoming = Array.isArray(raw) ? raw : [];
+  incoming.forEach((item) => {
+    const key = item && typeof item === "object" ? (item as Record<string, unknown>).key : null;
+    if (typeof key === "string" && (BRIEF_EVIDENCE_KEYS as readonly string[]).includes(key)) next.set(key as EvidenceKey, sanitizeEvidenceItem(item, key as EvidenceKey, "call_reported"));
+  });
+  return BRIEF_EVIDENCE_KEYS.map((key) => next.get(key) ?? emptyEvidence(key));
+}
+
+function sanitizeBlockers(raw: unknown): BriefBlocker[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.slice(0, 8).flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const row = item as Record<string, unknown>;
+    const value = safeBriefText(row.value, LIMITS.evidence);
+    const source = row.source === "call_reported" || row.source === "coordinator" ? row.source : null;
+    if (!value || !source) return [];
+    return [{ value, source, supporting_excerpt: safeExcerpt(row.supporting_excerpt) || null }];
+  });
+}
+
+export function assessReadiness(evidence: EvidenceItem[], blockers: BriefBlocker[], completion: CallCompletionStatus, followUps: BriefFollowUp[] = []): ReadinessStatus {
+  if (blockers.length) return "blocked";
+  if (followUps.length) return "needs_follow_up";
+  if (evidence.some((item) => item.status === "missing" || item.status === "uncertain")) return "needs_follow_up";
+  if (completion !== "completed") return "unknown";
+  if (evidence.some((item) => item.status === "unverified")) return "unknown";
+  if (evidence.every((item) => item.source === "call_reported" && item.status === "confirmed")) return "ready_for_technician_review";
+  return "unknown";
+}
+
+export function callCompletionFromAttempt(attempt?: { provider_status?: string | null } | null): CallCompletionStatus {
+  if (attempt?.provider_status === "queued") return "in_progress";
+  return normalizeEnum(attempt?.provider_status, ["not_started", "in_progress", "completed", "failed", "canceled", "unknown"] as const, "not_started");
+}
+export function adaptiveQuestionsForJob(job: RepairJobRecord): string[] {
+  const questions = ["Confirm you are speaking with the intended customer and that they agree to a short preparation conversation. Do not ask for passwords or access codes."];
+  questions.push(job.brand?.trim() && job.model?.trim() ? "Read back the saved appliance brand and full model number, then ask the customer to correct either one if needed." : "Ask the customer to read the appliance brand and full model number exactly as shown on the appliance.");
+  questions.push("Ask for the symptoms in the customer's own words. If the description is broad, ask one neutral follow-up for what the sound or sensation is like and what the appliance is doing when it starts. Preserve their words and do not suggest a cause or repair.");
+  questions.push("Separate the trigger from the operating moment: ask whether it starts while loading or turning the appliance on, then whether it happens during fill, wash, drain, spin, or another clearly described moment, and how consistently.");
+  questions.push(job.error_code?.trim() ? "Read back the saved error code and ask the customer to confirm it or explicitly say that no code is displayed. Never infer none from silence." : "Ask whether an error code is displayed. If none is visible, record an explicit no-error-code answer rather than inferring one.");
+  questions.push("Review or ask separately whether the building is a condo or apartment or another type. Capture a floor or unit only when appropriate for the private job, and never request a door, entry, alarm, security code, PIN, password, or credential.");
+  questions.push("Ask separately whether an elevator or stairs are needed, whether any route is narrow or restricted, and whether the route to the appliance and the available workspace are clear.");
+  questions.push("Ask about nearby parking or a loading zone, including rules, time limits, permits, or validation.");
+  questions.push("Ask whether pets are present and what safe access plan the technician should follow.");
+  questions.push("Ask for the exact days and hours when access is available and any blackout times. Treat this as an access window, not a scheduled appointment.");
+  questions.push("Ask how concierge registration works, whether advance notice or lead time is required, and whether the technician must bring a business card or other non-sensitive business identification.");
+  questions.push("Ask whether the participant explicitly cannot provide access or whether an unresolved requirement would prevent the visit. Put ordinary requirements in access_constraints, unknown details as unknown or incomplete, and only explicit blockers in visit_blockers. If no blocker is explicitly stated, leave visit_blockers empty.");
+  questions.push("Final checklist and review-only boundary: verify every material answer is explicit. Record each unresolved or vague material answer as a missing detail and mark the result incomplete or uncertain instead of silently treating it as complete. This outline does not place a call or edit call evidence. Never diagnose, give repair advice, schedule, take payment, or request codes, passwords, credentials, or other sensitive access information.");
+  return questions.slice(0, 13);
+}
+
+export function buildBriefPreview(job: RepairJobRecord, attempt?: { id?: string; provider_status?: string | null } | null): RepairBriefView {
+  const evidence = localEvidence(job);
+  const completion = callCompletionFromAttempt(attempt);
+  const view: RepairBriefView = { repair_job_id: job.id, call_attempt_id: text(attempt?.id, LIMITS.id), call_completion_status: completion, readiness_status: "unknown", human_review_state: "not_reviewed", human_review_note: "", reviewed_at: "", evidence, follow_ups: [], follow_up_reviews: [], blockers: [], safe_summary: "" };
+  view.readiness_status = assessReadiness(evidence, [], completion, view.follow_ups);
+  view.safe_summary = buildSafeBriefSummary(view, job);
+  return view;
+}
+function normalizeReviewState(value: unknown): HumanReviewState {
+  return normalizeEnum(value, ["not_reviewed", "reviewed", "needs_follow_up"] as const, "not_reviewed");
+}
+function normalizeCompletion(value: unknown, fallback: CallCompletionStatus): CallCompletionStatus {
+  return normalizeEnum(value, ["not_started", "in_progress", "completed", "failed", "canceled", "unknown"] as const, fallback);
+}
+function normalizeStored(raw: RepairBriefRecordLike, job: RepairJobRecord, attempt?: { id?: string; provider_status?: string | null } | null): RepairBriefView {
+  const local = localEvidence(job);
+  // Loading observes persisted call evidence and follow-ups only. Browser state never becomes evidence here.
+  const evidence = mergeCallReportedEvidence(local, persistedCallReportedEvidence(parseStoredJson(raw.evidence_json, 14000)));
+  const followUps = persistedCallReportedFollowUps(parseStoredJson(raw.follow_up_json, LIMITS.followUpJson));
+  const followUpReviews = validatedFollowUpReviews(parseStoredJson(raw.follow_up_review_json, LIMITS.followUpReviewJson), followUps);
+  const blockers = sanitizeBlockers(parseStoredJson(raw.blockers_json, 7000));
+  const attemptCompletion = callCompletionFromAttempt(attempt);
+  const hasAttemptStatus = typeof attempt?.provider_status === "string" && attempt.provider_status.trim().length > 0;
+  const completion = hasAttemptStatus ? attemptCompletion : normalizeCompletion(raw.call_completion_status, attemptCompletion);
+  const view: RepairBriefView = { id: text(raw.id, LIMITS.id) || undefined, repair_job_id: job.id, call_attempt_id: text(raw.call_attempt_id, LIMITS.id) || text(attempt?.id, LIMITS.id), call_completion_status: completion, readiness_status: "unknown", human_review_state: normalizeReviewState(raw.human_review_state), human_review_note: safeBriefText(raw.human_review_note, LIMITS.note), reviewed_at: text(raw.reviewed_at, 80), evidence, follow_ups: followUps, follow_up_reviews: followUpReviews, blockers, safe_summary: "", updated_at: raw.updated_at, updated_date: raw.updated_date };
+  view.readiness_status = assessReadiness(evidence, view.blockers, completion, followUps);
+  view.safe_summary = buildSafeBriefSummary(view, job);
+  return view;
+}
+type RepairBriefRecordLike = Partial<RepairBriefView> & { evidence_json?: string; blockers_json?: string; follow_up_json?: string; follow_up_review_json?: string; id?: string; call_attempt_id?: string; call_completion_status?: string; human_review_state?: string; human_review_note?: string; reviewed_at?: string };
+
+/**
+ * Selects and normalizes the newest saved brief for a queue item in one bulk read.
+ * A brief tied to the newest attempt wins; otherwise the newest saved brief wins.
+ */
+export function selectPersistedRepairBriefForQueue(
+  rawRows: unknown[],
+  job: RepairJobRecord,
+  attempt?: { id?: string; provider_status?: string | null } | null,
+): RepairBriefView | null {
+  const rows = rawRows.flatMap((raw) => {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return [];
+    const row = raw as RepairBriefRecordLike;
+    const repairJobId = text(row.repair_job_id, LIMITS.id);
+    const id = text(row.id, LIMITS.id);
+    return repairJobId === job.id && id ? [row] : [];
+  });
+  if (!rows.length) return null;
+  const attemptId = text(attempt?.id, LIMITS.id);
+  const selected = (attemptId && rows.find((row) => text(row.call_attempt_id, LIMITS.id) === attemptId)) ?? rows[0];
+  return selected ? normalizeStored(selected, job, attempt) : null;
+}
+
+async function listBriefs(jobId: string): Promise<RepairBriefRecordLike[]> {
+  const rows = await RepairBrief.filter({ repair_job_id: jobId }, "-updated_date", 20);
+  return (rows as RepairBriefRecordLike[]) ?? [];
+}
+export async function loadRepairBrief(job: RepairJobRecord, attempt?: { id?: string; provider_status?: string | null } | null): Promise<RepairBriefView> {
+  const rows = await listBriefs(job.id);
+  const attemptId = text(attempt?.id, LIMITS.id);
+  const row = (attemptId && rows.find((candidate) => text(candidate.call_attempt_id, LIMITS.id) === attemptId)) ?? rows[0];
+  return row ? normalizeStored(row, job, attempt) : buildBriefPreview(job, attempt);
+}
+export interface SaveBriefOptions {
+  human_review_state: HumanReviewState;
+  human_review_note: string;
+  follow_up_reviews: FollowUpReview[];
+  call_attempt_id?: string;
+}
+export async function saveRepairBrief(job: RepairJobRecord, current: RepairBriefView, options: SaveBriefOptions): Promise<RepairBriefView> {
+  const rows = (await listBriefs(job.id)).filter((row) => text(row.id, LIMITS.id));
+  const requestedAttemptId = text(options.call_attempt_id ?? current.call_attempt_id, LIMITS.id);
+  const existing = (requestedAttemptId && rows.find((row) => text(row.call_attempt_id, LIMITS.id) === requestedAttemptId)) ?? rows[0];
+  const persistedAttemptRows = requestedAttemptId ? await CallAttempt.filter({ id: requestedAttemptId }, "-updated_date", 1) : [];
+  const persistedAttempt = (persistedAttemptRows as Array<{ id?: string; repair_job_id?: string; provider_status?: string | null }>)[0];
+  // Review saves edit review fields only. Fresh coordinator data comes from the job;
+  // persisted call evidence, follow-ups, blockers, and completion are the sole trusted review inputs.
+  const evidence = mergeCallReportedEvidence(localEvidence(job), existing ? persistedCallReportedEvidence(parseStoredJson(existing.evidence_json, 14000)) : []);
+  const followUps = existing ? persistedCallReportedFollowUps(parseStoredJson(existing.follow_up_json, LIMITS.followUpJson)) : [];
+  const followUpReviews = existing ? mergeFollowUpReviews(followUps, parseStoredJson(existing.follow_up_review_json, LIMITS.followUpReviewJson), options.follow_up_reviews) : [];
+  const blockers = existing ? sanitizeBlockers(parseStoredJson(existing.blockers_json, 7000)) : [];
+  const attemptMatchesJob = persistedAttempt?.repair_job_id === job.id;
+  const completion = attemptMatchesJob && persistedAttempt?.provider_status
+    ? callCompletionFromAttempt(persistedAttempt)
+    : existing
+      ? normalizeCompletion(existing.call_completion_status, "not_started")
+      : "not_started";
+  const attemptId = text(existing?.call_attempt_id, LIMITS.id) || requestedAttemptId;
+  const reviewState = normalizeReviewState(options.human_review_state);
+  const reviewNote = safeBriefText(options.human_review_note, LIMITS.note);
+  const reviewedAt = reviewState === "not_reviewed" ? "" : new Date().toISOString();
+  const snapshot: RepairBriefView = { id: text(existing?.id, LIMITS.id) || undefined, repair_job_id: job.id, call_attempt_id: attemptId, call_completion_status: completion, readiness_status: assessReadiness(evidence, blockers, completion, followUps), human_review_state: reviewState, human_review_note: reviewNote, reviewed_at: reviewedAt, evidence, follow_ups: followUps, follow_up_reviews: followUpReviews, blockers, safe_summary: "" };
+  snapshot.safe_summary = buildSafeBriefSummary(snapshot, job);
+  const payload = { repair_job_id: job.id, call_attempt_id: attemptId, call_completion_status: completion, readiness_status: snapshot.readiness_status, human_review_state: reviewState, human_review_note: reviewNote, reviewed_at: reviewedAt, evidence_json: JSON.stringify(evidence), blockers_json: JSON.stringify(blockers), follow_up_json: JSON.stringify(followUps).slice(0, LIMITS.followUpJson), follow_up_review_json: JSON.stringify(followUpReviews).slice(0, LIMITS.followUpReviewJson), safe_summary: snapshot.safe_summary.slice(0, LIMITS.summary) };
+  const saved = existing ? await RepairBrief.update(String(existing.id), payload) : await RepairBrief.create(payload);
+  return normalizeStored({ ...(existing ?? {}), ...(saved as RepairBriefRecordLike), ...payload }, job, { id: attemptId });
+}
+
+export function buildSafeBriefSummary(brief: RepairBriefView, job?: RepairJobRecord): string {
+  const lines = ["RepairReady technician brief", job ? `Job: ${safeBriefText(job.customer_name, 80) || "Unknown"}` : "", job ? `Appliance: ${applianceLabel(job.appliance_type)}` : "", `Call completion: ${completionLabel(brief.call_completion_status)}`, `Business readiness: ${readinessLabel(brief.readiness_status)}`, "", "Evidence"];
+  brief.evidence.forEach((item) => { lines.push(`- ${item.label}: ${evidenceStatusLabel(item.status)} · ${evidenceSourceLabel(item.source)} · ${item.value || "Unknown"}`); if (item.supporting_excerpt) lines.push(`  Supporting excerpt: “${item.supporting_excerpt}”`); });
+  lines.push("", "Follow-up details");
+  const reviews = new Map(brief.follow_up_reviews.map((item) => [item.key, item]));
+  const safeFollowUps = brief.follow_ups.flatMap((item) => { const value = safeBriefText(item.value, LIMITS.followUp); return value ? [{ ...item, value }] : []; });
+  if (safeFollowUps.length) safeFollowUps.forEach((followUp) => { const review = reviews.get(followUp.key); const reviewLabel = review ? ` · ${followUpReviewLabel(review.status)}` : ""; lines.push(`- ${followUp.value} · ${evidenceSourceLabel(followUp.source)}${reviewLabel}`); const note = review ? safeBriefText(review.note, LIMITS.followUpReviewNote) : ""; if (note) lines.push(`  Coordinator note (unverified): ${note}`); }); else lines.push("- No specific follow-up details were recorded.");
+  lines.push("", "Blockers");
+  if (brief.blockers.length) brief.blockers.forEach((blocker) => lines.push(`- ${blocker.value} · ${evidenceSourceLabel(blocker.source)}${blocker.supporting_excerpt ? ` · “${blocker.supporting_excerpt}”` : ""}`)); else lines.push("- None explicitly recorded.");
+  lines.push("", `Human review: ${humanReviewLabel(brief.human_review_state)}`);
+  if (brief.human_review_note) lines.push(`Review note: ${brief.human_review_note}`);
+  lines.push("", "Coordinator entries are unverified. Follow-up review records human attention only; they do not confirm customer answers or change readiness.");
+  return lines.filter((line, index) => line || (index > 0 && lines[index - 1])).join("\n").slice(0, LIMITS.summary);
+}
+export async function copyTextToClipboard(value: string): Promise<void> {
+  if (typeof navigator === "undefined" || !navigator.clipboard?.writeText) throw new Error("Clipboard access is unavailable in this browser.");
+  await navigator.clipboard.writeText(value);
+}
