@@ -33,6 +33,10 @@ function hasText(value: unknown): boolean {
 
 Deno.serve(async (req) => {
   const origin = req.headers.get("Origin");
+  // SECURITY: Reject requests without Origin header to prevent CSRF attacks
+  if (!origin) {
+    return jsonResponse({ status: "error", message: "Origin header is required for security." }, 403, null);
+  }
   if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: corsHeaders(origin) });
   if (req.method !== "POST") {
     return jsonResponse({ status: "error", message: "Use the signed-in workspace to approve a call." }, 405, origin);
