@@ -54,12 +54,15 @@ import {
   isNonTerminalCallStatus,
   loadCallAttemptDraft,
   saveCallAttemptDraft,
+  saveFollowUpCallAttemptDraft,
   type CallAttemptDraft,
 } from "@/lib/call-attempts";
 import {
   buildSafeBriefSummary,
   copyTextToClipboard,
+  createBriefShareLink,
   loadRepairBrief,
+  revokeBriefShareLink,
   saveRepairBrief,
   type FollowUpReview,
   type HumanReviewState,
@@ -133,6 +136,8 @@ const Index = () => {
   const [approveMessage, setApproveMessage] = useState("");
   const [dispatchState, setDispatchState] = useState<"idle" | "loading" | "submitted" | "error">("idle");
   const [dispatchMessage, setDispatchMessage] = useState("");
+  const [shareLinkState, setShareLinkState] = useState<"idle" | "loading" | "error">("idle");
+  const [shareLinkMessage, setShareLinkMessage] = useState("");
 
   const clearPrivateState = useCallback(() => {
     jobsRequestRef.current += 1;
@@ -171,6 +176,8 @@ const Index = () => {
     setApproveMessage("");
     setDispatchState("idle");
     setDispatchMessage("");
+    setShareLinkState("idle");
+    setShareLinkMessage("");
   }, []);
 
   const resolveAuth = useCallback(async () => {
@@ -363,6 +370,8 @@ const Index = () => {
     setApproveMessage("");
     setDispatchState("idle");
     setDispatchMessage("");
+    setShareLinkState("idle");
+    setShareLinkMessage("");
     if (jobId) {
       const updated = await updateRepairJob(jobId, input);
       const nextJobs = jobs
@@ -416,6 +425,33 @@ const Index = () => {
     }
   };
 
+  const handleCreateFollowUpDraft = async () => {
+    const target = selected;
+    if (!target || !brief || callDraftSaving) return;
+
+    setCallDraftSaving(true);
+    setCallDraftError(null);
+    setApproveState("idle");
+    setApproveMessage("");
+    setDispatchState("idle");
+    setDispatchMessage("");
+    try {
+      const saved = await saveFollowUpCallAttemptDraft(target, brief);
+      if (selectedId === target.id) setCallDraft(saved);
+      await refreshReadinessQueue(jobs);
+      toast({
+        title: "Follow-up call prepared",
+        description: "A targeted draft was saved above, asking only about what the last call left unresolved. Approve it there to place the call.",
+      });
+    } catch (err) {
+      const message = friendlyError(err, "Could not prepare the follow-up call. Try again.");
+      if (selectedId === target.id) setCallDraftError(message);
+      toast({ title: "Follow-up draft was not saved", description: message, variant: "destructive" });
+    } finally {
+      setCallDraftSaving(false);
+    }
+  };
+
   const handleSaveBriefReview = async (state: HumanReviewState, note: string, followUpReviews: FollowUpReview[]) => {
     const target = selected;
     if (!target || !brief || briefSaving) return;
@@ -459,6 +495,42 @@ const Index = () => {
         description: friendlyError(err, "Clipboard access is unavailable. Select the brief text and copy it manually."),
         variant: "destructive",
       });
+    }
+  };
+
+  const handleCreateShareLink = async () => {
+    if (!brief || shareLinkState === "loading") return;
+    setShareLinkState("loading");
+    setShareLinkMessage("");
+    try {
+      const updated = await createBriefShareLink(brief);
+      setBrief(updated);
+      toast({
+        title: "Share link created",
+        description: "Valid for 48 hours. Anyone with the link can view the brief; no sign-in required.",
+      });
+    } catch (err) {
+      const message = friendlyError(err, "Could not create a share link. Try again.");
+      setShareLinkMessage(message);
+      toast({ title: "Share link not created", description: message, variant: "destructive" });
+    } finally {
+      setShareLinkState("idle");
+    }
+  };
+
+  const handleRevokeShareLink = async () => {
+    if (!brief || shareLinkState === "loading") return;
+    setShareLinkState("loading");
+    try {
+      const updated = await revokeBriefShareLink(brief);
+      setBrief(updated);
+      toast({ title: "Share link revoked", description: "The old link no longer works." });
+    } catch (err) {
+      const message = friendlyError(err, "Could not revoke the share link. Try again.");
+      setShareLinkMessage(message);
+      toast({ title: "Could not revoke link", description: message, variant: "destructive" });
+    } finally {
+      setShareLinkState("idle");
     }
   };
 
@@ -685,6 +757,8 @@ const Index = () => {
     setApproveMessage("");
     setDispatchState("idle");
     setDispatchMessage("");
+    setShareLinkState("idle");
+    setShareLinkMessage("");
     setSelectedId(id);
     setMobileListOpen(false);
   };
@@ -999,6 +1073,12 @@ const Index = () => {
                     dispatchState={dispatchState}
                     dispatchMessage={dispatchMessage}
                     onDispatchCall={handleDispatchCall}
+                    shareLinkState={shareLinkState}
+                    shareLinkMessage={shareLinkMessage}
+                    onCreateShareLink={handleCreateShareLink}
+                    onRevokeShareLink={handleRevokeShareLink}
+                    followUpDraftState={callDraftSaving ? "loading" : "idle"}
+                    onCreateFollowUpDraft={handleCreateFollowUpDraft}
                   />
                 ) : (
                   <EmptyDetail onCreate={openCreate} hasJobs={jobs.length > 0} />

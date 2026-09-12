@@ -67,6 +67,8 @@ export interface RepairBriefView {
   follow_up_reviews: FollowUpReview[];
   blockers: BriefBlocker[];
   safe_summary: string;
+  share_token?: string | null;
+  share_expires_at?: string | null;
   updated_at?: string;
   updated_date?: string;
 }
@@ -454,6 +456,30 @@ function sanitizeBlockers(raw: unknown): BriefBlocker[] {
   });
 }
 
+/**
+ * Builds a short, targeted question set for a follow-up call that asks only about what the
+ * previous call left unresolved — not the full intake questionnaire again. Always opens with
+ * the same identity/consent confirmation as a fresh call, since consent is never assumed to
+ * carry over from a prior attempt.
+ */
+export function targetedFollowUpQuestions(brief: Pick<RepairBriefView, "follow_ups" | "evidence">): string[] {
+  const questions: string[] = [
+    "Confirm you are speaking with the intended customer and that they agree to a brief follow-up conversation about a few remaining details. Do not ask for passwords or access codes.",
+  ];
+  brief.follow_ups.forEach((item) => {
+    questions.push(`Ask specifically about this previously unresolved detail: "${item.value}". Get a clear, explicit answer rather than accepting a vague one, and do not re-ask about anything already confirmed.`);
+  });
+  brief.evidence
+    .filter((item) => item.status === "missing" || item.status === "uncertain")
+    .forEach((item) => {
+      questions.push(`Confirm ${item.label.toLowerCase()}, since this was not clearly established on the previous call.`);
+    });
+  questions.push(
+    "Final check: verify every material answer in this follow-up is explicit before ending. Do not diagnose, recommend repairs, schedule, take payment, or request security codes, credentials, passwords, or other sensitive access information."
+  );
+  return questions.slice(0, 10);
+}
+
 export function assessReadiness(evidence: EvidenceItem[], blockers: BriefBlocker[], completion: CallCompletionStatus, followUps: BriefFollowUp[] = []): ReadinessStatus {
   if (blockers.length) return "blocked";
   if (followUps.length) return "needs_follow_up";
@@ -488,7 +514,7 @@ export function adaptiveQuestionsForJob(job: RepairJobRecord): string[] {
 export function buildBriefPreview(job: RepairJobRecord, attempt?: { id?: string; provider_status?: string | null } | null): RepairBriefView {
   const evidence = localEvidence(job);
   const completion = callCompletionFromAttempt(attempt);
-  const view: RepairBriefView = { repair_job_id: job.id, call_attempt_id: text(attempt?.id, LIMITS.id), call_completion_status: completion, readiness_status: "unknown", human_review_state: "not_reviewed", human_review_note: "", reviewed_at: "", evidence, follow_ups: [], follow_up_reviews: [], blockers: [], safe_summary: "" };
+  const view: RepairBriefView = { repair_job_id: job.id, call_attempt_id: text(attempt?.id, LIMITS.id), call_completion_status: completion, readiness_status: "unknown", human_review_state: "not_reviewed", human_review_note: "", reviewed_at: "", evidence, follow_ups: [], follow_up_reviews: [], blockers: [], safe_summary: "", share_token: null, share_expires_at: null };
   view.readiness_status = assessReadiness(evidence, [], completion, view.follow_ups);
   view.safe_summary = buildSafeBriefSummary(view, job);
   return view;
@@ -509,7 +535,7 @@ function normalizeStored(raw: RepairBriefRecordLike, job: RepairJobRecord, attem
   const attemptCompletion = callCompletionFromAttempt(attempt);
   const hasAttemptStatus = typeof attempt?.provider_status === "string" && attempt.provider_status.trim().length > 0;
   const completion = hasAttemptStatus ? attemptCompletion : normalizeCompletion(raw.call_completion_status, attemptCompletion);
-  const view: RepairBriefView = { id: text(raw.id, LIMITS.id) || undefined, repair_job_id: job.id, call_attempt_id: text(raw.call_attempt_id, LIMITS.id) || text(attempt?.id, LIMITS.id), call_completion_status: completion, readiness_status: "unknown", human_review_state: normalizeReviewState(raw.human_review_state), human_review_note: safeBriefText(raw.human_review_note, LIMITS.note), reviewed_at: text(raw.reviewed_at, 80), evidence, follow_ups: followUps, follow_up_reviews: followUpReviews, blockers, safe_summary: "", updated_at: raw.updated_at, updated_date: raw.updated_date };
+  const view: RepairBriefView = { id: text(raw.id, LIMITS.id) || undefined, repair_job_id: job.id, call_attempt_id: text(raw.call_attempt_id, LIMITS.id) || text(attempt?.id, LIMITS.id), call_completion_status: completion, readiness_status: "unknown", human_review_state: normalizeReviewState(raw.human_review_state), human_review_note: safeBriefText(raw.human_review_note, LIMITS.note), reviewed_at: text(raw.reviewed_at, 80), evidence, follow_ups: followUps, follow_up_reviews: followUpReviews, blockers, safe_summary: "", share_token: typeof raw.share_token === "string" && raw.share_token ? raw.share_token : null, share_expires_at: typeof raw.share_expires_at === "string" && raw.share_expires_at ? raw.share_expires_at : null, updated_at: raw.updated_at, updated_date: raw.updated_date };
   view.readiness_status = assessReadiness(evidence, view.blockers, completion, followUps);
   view.safe_summary = buildSafeBriefSummary(view, job);
   return view;
@@ -597,6 +623,37 @@ export function buildSafeBriefSummary(brief: RepairBriefView, job?: RepairJobRec
   lines.push("", "Coordinator entries are unverified. Follow-up review records human attention only; they do not confirm customer answers or change readiness.");
   return lines.filter((line, index) => line || (index > 0 && lines[index - 1])).join("\n").slice(0, LIMITS.summary);
 }
+const SHARE_LINK_WINDOW_MS = 48 * 60 * 60 * 1000;
+
+function randomShareToken(): string {
+  const uuid = (globalThis.crypto as { randomUUID?: () => string } | undefined)?.randomUUID?.();
+  return (uuid ?? `${Date.now()}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`).replace(/-/g, "");
+}
+
+/** Creates (or replaces) a time-boxed, unauthenticated read-only link to this brief's safe summary. */
+export async function createBriefShareLink(brief: RepairBriefView): Promise<RepairBriefView> {
+  if (!brief.id) throw new Error("Save the brief before creating a share link.");
+  const token = randomShareToken();
+  const expiresAt = new Date(Date.now() + SHARE_LINK_WINDOW_MS).toISOString();
+  await RepairBrief.update(brief.id, { share_token: token, share_expires_at: expiresAt });
+  return { ...brief, share_token: token, share_expires_at: expiresAt };
+}
+
+/** Immediately invalidates any existing share link for this brief. */
+export async function revokeBriefShareLink(brief: RepairBriefView): Promise<RepairBriefView> {
+  if (!brief.id) throw new Error("This brief has not been saved yet.");
+  await RepairBrief.update(brief.id, { share_token: null, share_expires_at: null });
+  return { ...brief, share_token: null, share_expires_at: null };
+}
+
+export function isShareLinkActive(brief: Pick<RepairBriefView, "share_token" | "share_expires_at">): boolean {
+  return Boolean(
+    brief.share_token &&
+      brief.share_expires_at &&
+      Date.parse(brief.share_expires_at) > Date.now()
+  );
+}
+
 export async function copyTextToClipboard(value: string): Promise<void> {
   if (typeof navigator === "undefined" || !navigator.clipboard?.writeText) throw new Error("Clipboard access is unavailable in this browser.");
   await navigator.clipboard.writeText(value);

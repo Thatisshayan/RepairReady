@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { SAFE_DEFAULT_PHONE, normalizePhoneInput, validateJobInput, emptyJobInput } from "@/lib/repair-jobs";
 import { isCanonicalE164Phone } from "@/lib/call-attempts";
-import { assessReadiness, type BriefFollowUp, type EvidenceItem } from "@/lib/repair-briefs";
+import {
+  assessReadiness,
+  isShareLinkActive,
+  targetedFollowUpQuestions,
+  type BriefFollowUp,
+  type EvidenceItem,
+} from "@/lib/repair-briefs";
 
 /**
  * These tests cover the logic that decides whether a job is safe to hand a technician, and
@@ -44,10 +50,19 @@ describe("phone validation", () => {
   });
 });
 
+const EVIDENCE_LABELS: Record<EvidenceItem["key"], string> = {
+  appliance_identity: "Appliance brand and model",
+  symptoms: "Symptoms in the customer's own words",
+  timing: "When the symptom occurs",
+  error_code: "Error code or explicit none",
+  visit_logistics: "Access, parking, pets, and workspace",
+};
+
 function evidence(overrides: Partial<EvidenceItem> = {}): EvidenceItem {
+  const key = overrides.key ?? "appliance_identity";
   return {
-    key: "appliance_identity",
-    label: "Appliance brand and model",
+    key,
+    label: EVIDENCE_LABELS[key],
     status: "confirmed",
     source: "call_reported",
     value: "LG WM3900",
@@ -103,5 +118,54 @@ describe("assessReadiness — the technician-facing readiness decision", () => {
     // expired must never be treated as an implicit "completed" that could mark a job ready.
     const status = assessReadiness(ALL_CONFIRMED, [], "no_answer");
     expect(status).not.toBe("ready_for_technician_review");
+  });
+});
+
+describe("isShareLinkActive — gate on the public technician-facing link", () => {
+  it("is inactive when there is no token", () => {
+    expect(isShareLinkActive({ share_token: null, share_expires_at: null })).toBe(false);
+  });
+
+  it("is inactive once the expiry timestamp is in the past", () => {
+    expect(
+      isShareLinkActive({ share_token: "abc", share_expires_at: new Date(Date.now() - 1000).toISOString() })
+    ).toBe(false);
+  });
+
+  it("is active with a token and a future expiry", () => {
+    expect(
+      isShareLinkActive({ share_token: "abc", share_expires_at: new Date(Date.now() + 1000 * 60).toISOString() })
+    ).toBe(true);
+  });
+});
+
+describe("targetedFollowUpQuestions — the smart follow-up call's question set", () => {
+  it("always re-confirms identity and consent, even with nothing else unresolved", () => {
+    const questions = targetedFollowUpQuestions({ follow_ups: [], evidence: ALL_CONFIRMED });
+    expect(questions[0]).toMatch(/confirm you are speaking with the intended customer/i);
+  });
+
+  it("asks specifically about each open follow-up detail from the prior call", () => {
+    const followUps: BriefFollowUp[] = [{ key: "noise", value: "unclear grinding noise", source: "call_reported" }];
+    const questions = targetedFollowUpQuestions({ follow_ups: followUps, evidence: ALL_CONFIRMED });
+    expect(questions.some((q) => q.includes("unclear grinding noise"))).toBe(true);
+  });
+
+  it("asks about evidence areas still missing or uncertain, not ones already confirmed", () => {
+    const partial = [...ALL_CONFIRMED.slice(0, 4), evidence({ key: "visit_logistics", status: "missing", value: null, source: null })];
+    const questions = targetedFollowUpQuestions({ follow_ups: [], evidence: partial });
+    const joined = questions.join(" ").toLowerCase();
+    expect(joined).toContain("access, parking, pets, and workspace".toLowerCase());
+    expect(joined).not.toContain("appliance brand and model");
+  });
+
+  it("never grows unbounded no matter how many unresolved items exist", () => {
+    const manyFollowUps: BriefFollowUp[] = Array.from({ length: 20 }, (_, i) => ({
+      key: `item-${i}`,
+      value: `unresolved detail ${i}`,
+      source: "call_reported",
+    }));
+    const questions = targetedFollowUpQuestions({ follow_ups: manyFollowUps, evidence: ALL_CONFIRMED });
+    expect(questions.length).toBeLessThanOrEqual(10);
   });
 });

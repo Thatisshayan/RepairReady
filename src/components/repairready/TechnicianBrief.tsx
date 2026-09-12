@@ -6,10 +6,12 @@ import {
   Clock3,
   Copy,
   FileText,
+  Link2,
   ListChecks,
   Loader2,
   Printer,
   ShieldAlert,
+  X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -22,6 +24,7 @@ import {
   evidenceStatusLabel,
   followUpReviewLabel,
   humanReviewLabel,
+  isShareLinkActive,
   readinessDecisionFor,
   readinessLabel,
   readinessMetricsFor,
@@ -45,9 +48,30 @@ interface TechnicianBriefProps {
   onRetry: () => void;
   onSaveReview: (state: HumanReviewState, note: string, followUpReviews: FollowUpReview[]) => Promise<void>;
   onCopySummary: () => Promise<void>;
+  shareLinkState: "idle" | "loading" | "error";
+  shareLinkMessage: string;
+  onCreateShareLink: () => Promise<void>;
+  onRevokeShareLink: () => Promise<void>;
+  followUpDraftState: "idle" | "loading";
+  onCreateFollowUpDraft: () => Promise<void>;
 }
 
-export function TechnicianBrief({ job, brief, loading, saving, error, onRetry, onSaveReview, onCopySummary }: TechnicianBriefProps) {
+export function TechnicianBrief({
+  job,
+  brief,
+  loading,
+  saving,
+  error,
+  onRetry,
+  onSaveReview,
+  onCopySummary,
+  shareLinkState,
+  shareLinkMessage,
+  onCreateShareLink,
+  onRevokeShareLink,
+  followUpDraftState,
+  onCreateFollowUpDraft,
+}: TechnicianBriefProps) {
   const [reviewState, setReviewState] = useState<HumanReviewState>("not_reviewed");
   const [reviewNote, setReviewNote] = useState("");
   const [followUpReviews, setFollowUpReviews] = useState<FollowUpReview[]>([]);
@@ -97,16 +121,138 @@ export function TechnicianBrief({ job, brief, loading, saving, error, onRetry, o
             <div className="flex items-center gap-2"><ListChecks className="h-4 w-4 text-amber-700" aria-hidden /><p id="follow-up-details-title" className="text-sm font-semibold text-foreground">Follow-up details</p></div>
             <p className="mt-1 text-xs leading-relaxed text-amber-900/80">{brief.follow_ups.length ? "These details came from the call and still need independent confirmation." : "No specific call-reported follow-up details are saved."} Human review records coordinator attention only. It never changes call evidence or the calculated readiness.</p>
             {brief.follow_ups.length ? <ul className="mt-3 space-y-2" aria-label="Follow-up details">{brief.follow_ups.map((followUp) => { const review = reviewFor(followUp); return <li key={followUp.key} className="rr-brief-follow-up-row rounded-md border border-amber-500/25 bg-amber-50 px-2.5 py-2 text-sm text-amber-950"><div className="flex flex-wrap items-start justify-between gap-2"><div className="min-w-0"><p>{followUp.value}</p><span className="mt-1 block font-mono text-[10px] uppercase tracking-wide text-amber-800/75">{evidenceSourceLabel(followUp.source)}</span></div><span className="rr-status-chip shrink-0 border-amber-500/30 bg-amber-100 text-amber-900">{followUpReviewLabel(review.status)}</span></div><div className="rr-brief-screen-only mt-2 grid gap-2 sm:grid-cols-[minmax(0,9rem)_1fr]"><label className="text-xs font-semibold text-amber-950"><span className="block">Review status</span><select value={review.status} onChange={(event) => updateFollowUpReview(followUp, { status: event.target.value as FollowUpReviewStatus })} disabled={actionDisabled} aria-label={`Review status for ${followUp.value}`} className="mt-1.5 flex h-9 w-full rounded-md border border-amber-500/[0.35] bg-background px-2.5 text-xs font-normal text-foreground shadow-sm outline-none focus:ring-2 focus:ring-ring"><option value="open">Open</option><option value="reviewed">Reviewed</option></select></label><label className="text-xs font-semibold text-amber-950"><span className="block">Private coordinator note <span className="font-normal text-amber-900/70">Optional</span></span><Input value={review.note} onChange={(event) => updateFollowUpReview(followUp, { note: event.target.value.slice(0, 240) })} disabled={actionDisabled} maxLength={240} placeholder="What should a coordinator check?" aria-label={`Private coordinator note for ${followUp.value}`} className="mt-1.5 h-9 border-amber-500/[0.35] bg-background text-xs font-normal text-foreground" /></label></div><div className="hidden print:block mt-2 border-t border-amber-700/20 pt-2 text-xs text-amber-950"><p className="font-mono text-[10px] uppercase tracking-wide text-amber-800/75">Follow-up review</p><p className="mt-1 font-medium">{followUpReviewLabel(review.status)}</p>{sanitizeFollowUpReviewNote(review.note) && <p className="mt-1 leading-relaxed">Private coordinator note: {sanitizeFollowUpReviewNote(review.note)}</p>}</div></li>; })}</ul> : <p className="mt-2 text-xs leading-relaxed text-muted-foreground">No specific follow-up details were recorded. This does not confirm that every material detail is complete.</p>}
+            {brief.readiness_status === "needs_follow_up" && (
+              <div className="rr-brief-screen-only mt-3 border-t border-amber-500/25 pt-3">
+                <p className="text-xs leading-relaxed text-amber-900/80">
+                  Prepare a short follow-up call that asks only about what's unresolved above — not the full
+                  intake again. It goes through the same approval step (retype the number) as any other call.
+                </p>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => void onCreateFollowUpDraft()}
+                  disabled={followUpDraftState === "loading"}
+                  className="mt-2 border-amber-500/40 bg-card text-amber-900 hover:bg-amber-100"
+                >
+                  {followUpDraftState === "loading" ? (
+                    <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" aria-hidden />
+                  ) : (
+                    <ListChecks className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+                  )}
+                  Prepare follow-up call
+                </Button>
+              </div>
+            )}
           </div>
 
           <div className="mt-4 rounded-lg border border-border bg-background/70 p-3.5"><div className="flex items-center gap-2"><ShieldAlert className="h-4 w-4 text-amber-700" aria-hidden /><p className="text-sm font-semibold text-foreground">Visit blockers</p></div>{brief.blockers.length ? <ul className="mt-2 space-y-2">{brief.blockers.map((blocker, index) => <li key={`${blocker.value}-${index}`} className="rounded-md border border-amber-500/25 bg-amber-50 px-2.5 py-2 text-sm text-amber-950"><span>{blocker.value}</span><span className="mt-1 block font-mono text-[10px] uppercase tracking-wide text-amber-800/75">{evidenceSourceLabel(blocker.source)}{blocker.supporting_excerpt ? ` · “${blocker.supporting_excerpt}”` : ""}</span></li>)}</ul> : <p className="mt-2 text-xs leading-relaxed text-muted-foreground">No blockers have been explicitly recorded. Missing information is shown above and is not treated as a blocker automatically.</p>}</div>
 
           <div className="rr-brief-review-form mt-4 rounded-lg border border-primary/20 bg-primary/5 p-3.5 sm:p-4"><div className="flex items-start gap-2.5"><CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-primary" aria-hidden /><div><p className="text-sm font-semibold text-foreground">Human review</p><p className="mt-1 text-xs leading-relaxed text-muted-foreground">Human review records coordinator attention only. It never changes call evidence or the calculated readiness, and it does not approve a call.</p></div></div><div className="mt-3 grid gap-3 sm:grid-cols-[minmax(0,13rem)_1fr]"><label className="space-y-1.5 text-sm font-medium text-foreground">Review state<select value={reviewState} onChange={(event) => setReviewState(event.target.value as HumanReviewState)} disabled={actionDisabled} className="mt-1.5 flex h-10 w-full rounded-md border border-input bg-background px-3 text-sm font-normal shadow-sm outline-none focus:ring-2 focus:ring-ring" aria-label="Human review state"><option value="not_reviewed">Not reviewed</option><option value="reviewed">Reviewed</option><option value="needs_follow_up">Follow-up noted</option></select></label><label className="space-y-1.5 text-sm font-medium text-foreground">Review note<span className="ml-1 text-xs font-normal text-muted-foreground">Optional</span><Textarea value={reviewNote} onChange={(event) => setReviewNote(event.target.value.slice(0, 600))} disabled={actionDisabled} rows={3} maxLength={600} placeholder="Record what needs a human follow-up…" className="mt-1.5 resize-y bg-background text-sm font-normal" /></label></div><div className="rr-brief-controls mt-3 flex flex-wrap gap-2"><Button type="button" onClick={() => onSaveReview(reviewState, reviewNote, followUpReviews)} disabled={actionDisabled} className="bg-primary text-primary-foreground hover:bg-primary/90">{saving ? <><Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" aria-hidden />Saving brief review…</> : "Save brief review"}</Button><Button type="button" variant="outline" onClick={onCopySummary} disabled={actionDisabled} className="bg-card"><Copy className="mr-1.5 h-3.5 w-3.5" aria-hidden />Copy summary</Button><Button type="button" variant="outline" onClick={printBrief} disabled={actionDisabled} className="bg-card"><Printer className="mr-1.5 h-3.5 w-3.5" aria-hidden />Print brief</Button></div></div>
+          {brief && (
+            <ShareLinkSection
+              brief={brief}
+              shareLinkState={shareLinkState}
+              shareLinkMessage={shareLinkMessage}
+              onCreateShareLink={onCreateShareLink}
+              onRevokeShareLink={onRevokeShareLink}
+            />
+          )}
           <div className="rr-brief-review-print hidden"><p className="font-mono text-[10px] uppercase tracking-[0.14em]">Human review</p><p className="mt-1 text-sm font-medium">{humanReviewLabel(brief.human_review_state)}</p>{brief.human_review_note && <p className="mt-1 text-sm leading-relaxed">{brief.human_review_note}</p>}</div>
           <p className="rr-brief-screen-only mt-3 text-xs leading-relaxed text-muted-foreground">Readiness is separate from call completion. A failed provider state does not explain why a call failed, and it does not create confirmation.</p>
         </>
       ) : null}
     </section>
+  );
+}
+
+function ShareLinkSection({
+  brief,
+  shareLinkState,
+  shareLinkMessage,
+  onCreateShareLink,
+  onRevokeShareLink,
+}: {
+  brief: RepairBriefView;
+  shareLinkState: "idle" | "loading" | "error";
+  shareLinkMessage: string;
+  onCreateShareLink: () => Promise<void>;
+  onRevokeShareLink: () => Promise<void>;
+}) {
+  const [copied, setCopied] = useState(false);
+  const active = isShareLinkActive(brief);
+  const shareUrl = active && typeof window !== "undefined" ? `${window.location.origin}/shared/${brief.share_token}` : "";
+
+  const handleCopy = async () => {
+    if (!shareUrl) return;
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2000);
+    } catch {
+      /* clipboard unavailable; the link is still visible to select manually */
+    }
+  };
+
+  return (
+    <div className="rr-brief-screen-only mt-4 rounded-lg border border-primary/20 bg-primary/5 p-3.5 sm:p-4">
+      <div className="flex items-start gap-2.5">
+        <Link2 className="mt-0.5 h-4 w-4 shrink-0 text-primary" aria-hidden />
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-semibold text-foreground">Share with a technician</p>
+          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+            {active
+              ? `A read-only link is live until ${new Date(brief.share_expires_at as string).toLocaleString()}. No sign-in required to view it. Phone numbers and private review notes are never included.`
+              : "Create a time-boxed, read-only link a technician can open without an account. Valid 48 hours; revoke it any time."}
+          </p>
+        </div>
+      </div>
+      {active ? (
+        <div className="mt-3 space-y-2">
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <Input readOnly value={shareUrl} className="bg-background font-mono text-xs" onFocus={(e) => e.target.select()} />
+            <div className="flex gap-2">
+              <Button type="button" variant="outline" size="sm" onClick={() => void handleCopy()} className="bg-card">
+                <Copy className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+                {copied ? "Copied" : "Copy"}
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => void onRevokeShareLink()}
+                disabled={shareLinkState === "loading"}
+                className="border-destructive/30 text-destructive hover:bg-destructive/5"
+              >
+                <X className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+                Revoke
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={() => void onCreateShareLink()}
+          disabled={shareLinkState === "loading"}
+          className="mt-3 bg-card"
+        >
+          {shareLinkState === "loading" ? (
+            <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" aria-hidden />
+          ) : (
+            <Link2 className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+          )}
+          Create share link
+        </Button>
+      )}
+      {shareLinkMessage && (
+        <p className="mt-2 text-xs leading-relaxed text-destructive" role="alert">
+          {shareLinkMessage}
+        </p>
+      )}
+    </div>
   );
 }
 

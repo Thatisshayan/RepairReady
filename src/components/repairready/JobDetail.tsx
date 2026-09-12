@@ -66,6 +66,12 @@ interface JobDetailProps {
   dispatchState: "idle" | "loading" | "submitted" | "error";
   dispatchMessage: string;
   onDispatchCall: () => Promise<void>;
+  shareLinkState: "idle" | "loading" | "error";
+  shareLinkMessage: string;
+  onCreateShareLink: () => Promise<void>;
+  onRevokeShareLink: () => Promise<void>;
+  followUpDraftState: "idle" | "loading";
+  onCreateFollowUpDraft: () => Promise<void>;
 }
 
 type ConnectionState = "idle" | "checking" | "connected" | "not_connected" | "error";
@@ -98,6 +104,12 @@ export function JobDetail({
   dispatchState,
   dispatchMessage,
   onDispatchCall,
+  shareLinkState,
+  shareLinkMessage,
+  onCreateShareLink,
+  onRevokeShareLink,
+  followUpDraftState,
+  onCreateFollowUpDraft,
 }: JobDetailProps) {
   const reduceMotion = useReducedMotion();
   const checklist = preparationChecklist(job);
@@ -255,6 +267,12 @@ export function JobDetail({
             onRetry={onRetryBrief}
             onSaveReview={onSaveBriefReview}
             onCopySummary={onCopyBriefSummary}
+            shareLinkState={shareLinkState}
+            shareLinkMessage={shareLinkMessage}
+            onCreateShareLink={onCreateShareLink}
+            onRevokeShareLink={onRevokeShareLink}
+            followUpDraftState={followUpDraftState}
+            onCreateFollowUpDraft={onCreateFollowUpDraft}
           />
         </div>
 

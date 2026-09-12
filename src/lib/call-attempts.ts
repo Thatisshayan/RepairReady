@@ -1,5 +1,5 @@
 import { CallAttempt } from "@/entities";
-import { adaptiveQuestionsForJob } from "@/lib/repair-briefs";
+import { adaptiveQuestionsForJob, targetedFollowUpQuestions, type RepairBriefView } from "@/lib/repair-briefs";
 import { applianceLabel, type RepairJobRecord } from "@/lib/repair-jobs";
 
 export const AUTHORIZED_DEMO_MARKER = "repairready_authorized_demo" as const;
@@ -110,7 +110,10 @@ function safeText(value: string | null | undefined, max: number): string {
 }
 
 /** Keeps only the operator-entered context needed to reconstruct the local review. */
-export function buildCallRequestSnapshot(job: RepairJobRecord): string {
+export function buildCallRequestSnapshot(
+  job: RepairJobRecord,
+  overrides?: { purpose?: string; questions?: string[] }
+): string {
   return JSON.stringify({
     appliance_type: safeText(job.appliance_type, 60),
     appliance: applianceLabel(job.appliance_type),
@@ -121,8 +124,8 @@ export function buildCallRequestSnapshot(job: RepairJobRecord): string {
     error_code: safeText(job.error_code, 40),
     visit_note: safeText(job.visit_note, 400),
     access_notes_present: Boolean(safeText(job.access_notes, 400)),
-    purpose: callPurposeForJob(job),
-    questions: adaptiveQuestionsForJob(job),
+    purpose: overrides?.purpose ?? callPurposeForJob(job),
+    questions: overrides?.questions ?? adaptiveQuestionsForJob(job),
   });
 }
 
@@ -328,4 +331,56 @@ export async function saveCallAttemptDraft(job: RepairJobRecord): Promise<CallAt
     ? ({ ...existing, ...(saved as CallAttemptDraft) } as CallAttemptDraft)
     : (saved as CallAttemptDraft);
   return asDraft(savedRecord, true);
+}
+
+export function followUpPurposeForJob(job: RepairJobRecord): string {
+  return `Targeted follow-up call for a ${applianceLabel(job.appliance_type).toLowerCase()} job. Resolve only the specific details left unclear from the previous call. Do not diagnose or promise a repair.`;
+}
+
+/**
+ * Always creates a fresh call_attempts row rather than reusing the prior one, since the prior
+ * attempt already has server-reserved provider state (it completed) and must stay untouched as
+ * history. The new draft asks only about what the previous call left unresolved.
+ */
+export async function saveFollowUpCallAttemptDraft(
+  job: RepairJobRecord,
+  brief: Pick<RepairBriefView, "follow_ups" | "evidence">
+): Promise<CallAttemptDraft> {
+  if (!job.id) throw new Error("Select a saved repair job before preparing a follow-up call.");
+  if (!isCanonicalE164Phone(job.phone)) {
+    throw new Error("Save the job with a canonical +countrycode phone before preparing a follow-up call.");
+  }
+  const questions = targetedFollowUpQuestions(brief);
+  if (questions.length <= 2) {
+    throw new Error("There are no unresolved follow-up details to prepare a targeted call about.");
+  }
+
+  const purpose = followUpPurposeForJob(job);
+  const snapshot = buildCallRequestSnapshot(job, { purpose, questions });
+  const payload = {
+    repair_job_id: job.id,
+    recipient_name: safeText(job.customer_name, LIMITS.recipient_name),
+    recipient_phone: job.phone.trim(),
+    recipient_region: "",
+    recipient_locale: "",
+    preparation_purpose: safeText(purpose, LIMITS.purpose),
+    question_outline: questions.join("\n").slice(0, LIMITS.question_outline),
+    request_snapshot: snapshot.slice(0, LIMITS.request_snapshot),
+    idempotency_key: createIdempotencyKey(),
+    lifecycle_status: "prepared" as const,
+    approval_state: "not_approved" as const,
+    approved_recipient_phone: "",
+    approved_at: "",
+    approval_expires_at: "",
+    provider_call_id: "",
+    provider_status: "",
+    submitted_at: "",
+    completed_at: "",
+    safe_error_category: "",
+    safe_result_summary: "",
+    review_note: "Prepared locally as a targeted follow-up call. It is not approved and has not been submitted.".slice(0, LIMITS.review_note),
+  };
+
+  const created = await CallAttempt.create(payload);
+  return asDraft(created as CallAttemptDraft, true);
 }
