@@ -73,9 +73,33 @@ Deadline: 2026-09-14, 11:45pm SGT — hard cutoff, no grace period.
       draft paths (retry/follow-up/post-visit) in `call-attempts.ts`, so the common case fails
       with a clear message instead of a raw DB constraint error; the migration remains the
       authoritative race-proof backstop
-- [ ] Confirm one full real CALL-E call completes end-to-end and evidence lands correctly —
-      **not done, requires an actual live call** (real phone number, real dispatch) — this needs
-      your explicit go-ahead per project policy on real dispatch actions, not just code changes
+- [x] Confirmed one full real CALL-E call end-to-end (2026-09-13, user go-ahead given) via the
+      built-in "Run authorized demo call" path, dialing the pre-authorized test number. **Real
+      result:** CALL-E genuinely called and the user personally answered; audio started cutting
+      off word-by-word after the elevator question and the call auto-hung-up (a CALL-E-platform
+      audio issue, not a RepairReady bug). The webhook correctly flagged the call `completed`
+      (`provider_call_id: call_WJByjTySqeE77-_O0LmI4A`), and manually invoking
+      `get-calle-call-status` pulled a real structured result: all 5 evidence areas confirmed
+      (LG WMT400CW, "It's making noise... sometimes leaking water underneath", condo/penthouse
+      access), 8 honest follow-up items for what the degraded call left unresolved instead of
+      guessing, consent confirmed, completion confidence "high". Verified the new diagnosis engine
+      against this real data: correctly proposed "Door seal or hose connections" (high confidence,
+      2 candidate parts) from the real "leaking" symptom text, with zero false contradictions/
+      safety-flags. **Real bug found and reproduced (not yet fixed):** on a fresh page load, the
+      Technician Brief panel intermittently renders the stale/empty `buildBriefPreview` fallback
+      instead of the saved evidence, even though the readiness queue (a separate data path)
+      correctly shows "5 of 5 confirmed." Root-caused to `src/pages/Index.tsx`'s `callDraft`/
+      `brief`-loading `useEffect` pair (~lines 284-348): both depend on `selected`, which is
+      re-memoized on every `jobs` state change, and the two effects' async resolutions can settle
+      out of order, letting a stale `loadRepairBrief(selected, null)` call win over the correct
+      one. Confirmed via targeted console logging (added, used, then reverted — see commit
+      `059762c`) that this is a real race, not a test-harness artifact. **Not fixed yet** — flagged
+      here rather than either ignored or blind-patched under time pressure; a proper fix needs a
+      request-generation-counter or AbortController pattern instead of the current boolean `active`
+      flag, since React's cleanup-based guard isn't sufficient when two *different* effects (not
+      just two runs of the same effect) can both resolve into the same `brief` state.
+      Test job/data cleaned up afterward (repair_jobs cascade-deleted call_attempts/repair_briefs
+      back to 0 rows; both disposable test auth accounts deleted).
 
 ## Phase 9 — CI + testing [mostly done]
 - [x] `.github/workflows/ci.yml`: install, lint, test, build on push/PR to master — confirmed
