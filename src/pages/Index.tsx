@@ -118,6 +118,8 @@ const Index = () => {
   const [bulkPreparing, setBulkPreparing] = useState(false);
   const jobsRequestRef = useRef(0);
   const queueRequestRef = useRef(0);
+  const callDraftRequestRef = useRef(0);
+  const briefRequestRef = useRef(0);
   const [editorOpen, setEditorOpen] = useState(false);
   const [editingJob, setEditingJob] = useState<RepairJobRecord | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<RepairJobRecord | null>(null);
@@ -148,6 +150,8 @@ const Index = () => {
   const clearPrivateState = useCallback(() => {
     jobsRequestRef.current += 1;
     queueRequestRef.current += 1;
+    callDraftRequestRef.current += 1;
+    briefRequestRef.current += 1;
     setJobs([]);
     setQueueItems([]);
     setQueueSummary(EMPTY_QUEUE_SUMMARY);
@@ -282,69 +286,71 @@ const Index = () => {
   );
 
   useEffect(() => {
-    let active = true;
+    // A request-generation counter, not just this closure's `active` flag: `selected` is
+    // re-memoized (new reference, same job) on every `jobs` refresh, so this effect can run
+    // again before an earlier run's promise settles. React's cleanup only guards THIS run's own
+    // closure; it doesn't stop an in-flight earlier run's `.then()` from firing after a later run
+    // already resolved and set the correct draft, which is exactly what let a stale/null result
+    // win the race in production (see docs/build-roadmap.md, Phase 8).
+    const requestId = ++callDraftRequestRef.current;
     if (auth !== "signed_in" || !selected) {
-      setCallDraft(null);
-      setCallDraftLoading(false);
-      setCallDraftError(null);
-      return () => {
-        active = false;
-      };
+      if (requestId === callDraftRequestRef.current) {
+        setCallDraft(null);
+        setCallDraftLoading(false);
+        setCallDraftError(null);
+      }
+      return;
     }
 
     setCallDraftLoading(true);
     setCallDraftError(null);
     loadCallAttemptDraft(selected)
       .then((draft) => {
-        if (active) setCallDraft(draft);
+        if (requestId === callDraftRequestRef.current) setCallDraft(draft);
       })
       .catch((err) => {
-        if (!active) return;
+        if (requestId !== callDraftRequestRef.current) return;
         setCallDraft(null);
         setCallDraftError(
           friendlyError(err, "Could not load the private preparation draft. Try again.")
         );
       })
       .finally(() => {
-        if (active) setCallDraftLoading(false);
+        if (requestId === callDraftRequestRef.current) setCallDraftLoading(false);
       });
-
-    return () => {
-      active = false;
-    };
   }, [auth, selected]);
 
   useEffect(() => {
-    let active = true;
+    // Same request-generation guard as the callDraft effect above, and for the same reason: this
+    // effect's own `selected`/`callDraft` dependencies can each independently re-trigger it before
+    // an earlier run resolves, and a stale run resolving after a newer one previously overwrote a
+    // correctly-loaded brief with an empty one (see docs/build-roadmap.md, Phase 8).
+    const requestId = ++briefRequestRef.current;
     if (auth !== "signed_in" || !selected) {
-      setBrief(null);
-      setBriefLoading(false);
-      setBriefError(null);
-      return () => {
-        active = false;
-      };
+      if (requestId === briefRequestRef.current) {
+        setBrief(null);
+        setBriefLoading(false);
+        setBriefError(null);
+      }
+      return;
     }
 
     setBriefLoading(true);
     setBriefError(null);
     loadRepairBrief(selected, callDraft)
       .then((loaded) => {
-        if (active) setBrief(loaded);
+        if (requestId === briefRequestRef.current) setBrief(loaded);
       })
       .catch((err) => {
-        if (!active) return;
+        if (requestId !== briefRequestRef.current) return;
         setBrief(null);
         setBriefError(
           friendlyError(err, "Could not load the private technician brief. Try again.")
         );
       })
       .finally(() => {
-        if (active) setBriefLoading(false);
+        if (requestId === briefRequestRef.current) setBriefLoading(false);
       });
-
-    return () => {
-      active = false;
-    };
   }, [auth, selected, callDraft, briefReloadKey]);
 
   const handleLogout = async () => {
