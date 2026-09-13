@@ -78,7 +78,11 @@ Deadline: 2026-09-14, 11:45pm SGT — hard cutoff, no grace period.
       your explicit go-ahead per project policy on real dispatch actions, not just code changes
 
 ## Phase 9 — CI + testing [mostly done]
-- [x] `.github/workflows/ci.yml`: install, lint, test, build on push/PR to master
+- [x] `.github/workflows/ci.yml`: install, lint, test, build on push/PR to master — confirmed
+      actually green on GitHub Actions (not just "should work locally"), after fixing two real CI-
+      only failures: an npm-version lockfile mismatch (npm 10 on the runner vs npm 11 that
+      generated the lockfile) and missing public `VITE_SUPABASE_URL`/`VITE_SUPABASE_PUBLISHABLE_KEY`
+      env vars that `src/lib/supabase/client.ts` requires at import time
 - [x] Fixed pre-existing broken lint tooling (`typescript-eslint` 8.11.0 → 8.70.0, a devDependency-
       only bump) that was crashing before this work — lint went from "crashes on every run" to
       0 errors, 7 pre-existing/cosmetic warnings
