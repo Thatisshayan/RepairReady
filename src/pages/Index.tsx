@@ -283,8 +283,6 @@ const Index = () => {
 
   useEffect(() => {
     let active = true;
-    // eslint-disable-next-line no-console -- temporary diagnostic, removed after this debugging session
-    console.log("DEBUG callDraft effect fired", { auth, selectedId, selectedPresent: !!selected, jobsCount: jobs.length });
     if (auth !== "signed_in" || !selected) {
       setCallDraft(null);
       setCallDraftLoading(false);
@@ -302,8 +300,6 @@ const Index = () => {
       })
       .catch((err) => {
         if (!active) return;
-        // eslint-disable-next-line no-console -- temporary diagnostic, removed after this debugging session
-        console.log("DEBUG loadCallAttemptDraft error", err);
         setCallDraft(null);
         setCallDraftError(
           friendlyError(err, "Could not load the private preparation draft. Try again.")
@@ -333,8 +329,6 @@ const Index = () => {
     setBriefError(null);
     loadRepairBrief(selected, callDraft)
       .then((loaded) => {
-        // eslint-disable-next-line no-console -- temporary diagnostic, removed after this debugging session
-        console.log("DEBUG loadRepairBrief", { callDraftId: callDraft?.id, callDraftStatus: callDraft?.provider_status, loaded });
         if (active) setBrief(loaded);
       })
       .catch((err) => {
