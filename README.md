@@ -1,19 +1,70 @@
 # RepairReady
 
-RepairReady is a private pre-visit preparation desk for appliance repair coordinators. Before a
-technician drives to a job, RepairReady places a real, automated [CALL-E](https://heycall-e.com)
-phone call to the customer to confirm the appliance brand and model, symptoms, an error code (or
-an explicit "none"), and access logistics — then turns the structured result into a technician
-brief with a clear boundary between what the coordinator entered and what the call actually
-confirmed.
+A missed detail on an appliance-repair intake form — the wrong model number, an unmentioned
+walk-up, an error code nobody wrote down — turns into a wasted truck roll: a technician drives
+out, can't finish the job, and the visit has to be rescheduled. RepairReady is a private
+pre-visit preparation desk that closes that gap with a real, automated [CALL-E](https://heycall-e.com)
+phone call to the customer before a truck ever leaves, and turns the result into a technician
+brief with a hard boundary between what a coordinator typed and what the call actually confirmed.
 
-## Why a phone call
+## At a glance
 
-Appliance repair visits routinely fail or get rescheduled because a coordinator is working from
-an incomplete intake form: the wrong model number, an undescribed access requirement, an error
-code nobody wrote down. A short, structured phone call closes those gaps before the technician
-is on the road — and a call surfaces details a form doesn't, because a customer will *say*
-"the noise happens right when the spin cycle starts" in a way they'd never type into a box.
+- **The call, not the form, is the source of truth.** Every fact on a brief is labeled by where
+  it came from — coordinator entry (unverified) or call-confirmed — and a job is only marked
+  ready for a technician when every required area is independently confirmed by the call itself.
+- **A real phone number never gets dialed by accident.** Placing a call requires an explicit,
+  re-typed, time-boxed approval, enforced at the database level — not just in application code.
+  See [Trust & safety](#trust--safety) below and the deeper [design pattern write-up](docs/trust-and-safety-pattern.md).
+- **The tool follows the job, not just the call.** Beyond the initial pre-visit call, it covers
+  no-answer retries, targeted follow-up calls for what a prior call left unresolved, and a
+  post-visit check-in call — plus reported safety hazards (gas smell, exposed wiring, etc.) are
+  automatically flagged and pinned to the top of the queue.
+
+## The job lifecycle
+
+```mermaid
+flowchart LR
+    A[Job created] --> B[Preparation draft saved]
+    B --> C{Coordinator approves\nretyped phone number}
+    C -->|approved, 15 min window| D[Call dispatched to CALL-E]
+    D --> E{Provider status}
+    E -->|completed| F[Technician brief\nevidence + readiness]
+    E -->|no_answer / voicemail / busy| G[One-click retry\nnew draft, same approval flow]
+    E -->|queued / in_progress| E
+    F -->|unresolved detail| H[Targeted follow-up call]
+    F -->|visit finished| I[Post-visit check-in call]
+    G --> C
+    H --> C
+    I --> C
+```
+
+Status updates arrive two ways: the app polls every ~10s while a call is in flight (matching
+CALL-E's own recommended pattern), and CALL-E also pushes a webhook the moment a call finishes, so
+the readiness queue reflects reality even before a coordinator reopens the job. The webhook is
+never trusted directly — see [Trust & safety](#trust--safety).
+
+## Trust & safety
+
+RepairReady never dials a number just because it's saved on a job.
+
+1. **Prepared → approved → dispatched are three separate gates**, not one. Nothing before
+   "approved" can reach the provider; nothing after dispatch can be re-approved.
+2. **Approval requires re-typing the exact recipient phone number** — not a checkbox — plus a
+   region and locale, and the approval expires after 15 minutes.
+3. **The approval write is atomic and conditional**: it re-checks owner, lifecycle state, and
+   prior approval state directly in the database write itself, so two concurrent approval
+   attempts can't silently race each other.
+4. **Server-reserved fields are never client-writable.** A call's provider ID, provider status,
+   and timestamps can only be set by the server-side approve/dispatch/status logic.
+5. **The CALL-E webhook is treated as an untrusted hint, never as data.** It carries no signature
+   per CALL-E's own published spec, so the receiver ignores its body entirely and instead makes
+   its own authenticated request back to CALL-E before writing anything. A forged webhook can at
+   worst trigger one harmless extra status check — never fabricated call results.
+6. **CORS is a hardcoded allowlist**, not a wildcard and not an echo of whatever origin a caller
+   claims to be.
+
+The full generalized version of the approval pattern — written to be usable outside this app
+entirely — is in [`docs/trust-and-safety-pattern.md`](docs/trust-and-safety-pattern.md).
 
 ## How it decides a job is ready
 
@@ -22,23 +73,42 @@ or confirmed by the call) and a **status** (confirmed, missing, uncertain, unver
 Coordinator entries are always labeled unverified until the call independently confirms them.
 A job is only marked ready for technician review when every required evidence area — appliance
 identity, symptoms, timing, error code, and access — is confirmed by the call itself, with no
-unresolved follow-up detail and no explicit visit blocker. Coordinator review of a brief is
-tracked separately and never changes the underlying evidence or the readiness decision.
+unresolved follow-up detail and no explicit visit blocker. An explicitly reported safety hazard
+(a gas smell, exposed wiring, a burning smell, etc.) always blocks readiness and is pinned above
+every other job in the queue, regardless of how complete the rest of the preparation is.
+Coordinator review of a brief is tracked separately and never changes the underlying evidence or
+the readiness decision.
 
-## Safety design: real calls always require a re-confirmed approval
+## Why CALL-E specifically
 
-RepairReady never dials a number just because it's saved on a job. Placing a real call requires:
+This isn't a thin wrapper around a single "make a call" endpoint. RepairReady uses:
 
-1. Saving a private preparation draft (purpose, recipient, and a locally-built question outline)
-   — this never contacts anyone.
-2. **Approving** that exact draft by re-typing the recipient's phone number, plus a region and
-   locale. The approval is valid for 15 minutes and does not place the call by itself.
-3. Explicitly dispatching the approved call.
+- **`result_schema` / `recipient_result_schema`** to get back structured, typed evidence (brand,
+  model, symptoms, error code, access constraints, visit blockers, consent, completion status)
+  instead of parsing free-form transcript text.
+- **`webhook_url`** on call creation, so the app is notified the moment a call finishes rather
+  than relying on polling alone.
+- **Idempotency keys** on every provider request, so a retried dispatch can never place a
+  duplicate call.
+- **Per-call region and locale**, auto-suggested from the recipient's own calling code rather
+  than hardcoded, so the same tool works for a non-US customer without manual correction.
 
-The approval step exists specifically so a phone number typed into a job by mistake can never
-turn into a real call without a deliberate, separate confirmation. That check is enforced at the
-database level (not just in application code) — an approval can only be written by a small set
-of server actions, never by a direct client update or insert.
+## Quality
+
+- 34 automated tests covering the safety-critical logic specifically: phone validation, the
+  readiness decision matrix, the safety-hazard detector, share-link gating, region/locale
+  guessing, and the follow-up/retry/post-visit question generators. Run with `npm test`.
+- Row-level security is enabled on all three tables (`repair_jobs`, `call_attempts`,
+  `repair_briefs`), scoped to the authenticated owner.
+
+## Known limitations / what's next
+
+- No SMS/email auto-delivery of a technician's share link yet — a coordinator still copies and
+  sends it manually. Deliberately not built without picking a real provider account first.
+- No bulk approval/dispatch — bulk preparation exists, but each call is still approved and
+  dispatched one at a time by design (see [Trust & safety](#trust--safety)).
+- No staging environment or CI pipeline yet; verification today is a local build + test run
+  before every deploy.
 
 ## Stack
 
@@ -55,8 +125,11 @@ cp .env.example .env.local   # fill in your own Supabase project's URL and publi
 npm run dev
 ```
 
-The Supabase project needs the schema in `supabase/functions/` deployed as Edge Functions, and a
-`CALLE_API_KEY` secret configured on the Supabase project for the CALL-E integration to work.
+The Supabase project needs the functions in `supabase/functions/` deployed as Edge Functions, and
+a `CALLE_API_KEY` secret configured on the Supabase project for the CALL-E integration to work.
+`calle-webhook` must be deployed with JWT verification disabled, since CALL-E's webhook carries no
+Supabase auth token — the other functions also run with verification disabled and do their own
+JWT check internally instead.
 
 ## Project structure
 
@@ -68,5 +141,8 @@ src/
   components/     UI
   pages/          App shell and routing
 supabase/
-  functions/      Edge Functions: connection check, approve, dispatch, and status-refresh
+  functions/      Edge Functions: connection check, approve, dispatch, status-refresh, webhook,
+                  and the public read-only shared-brief endpoint
+docs/
+  trust-and-safety-pattern.md   Reusable write-up of the approval pattern above
 ```
