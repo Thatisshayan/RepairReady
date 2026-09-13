@@ -146,6 +146,17 @@ export function ReadinessQueue({
             </p>
           </div>
         )}
+        {summary.loadedJobCount > 0 && summary.blockedCount > 0 && (
+          <div className="rr-impact-stat rounded-lg border border-amber-500/25 bg-amber-50/70 px-3 py-2.5">
+            <p className="font-mono text-[10px] uppercase tracking-[0.14em] text-amber-800">
+              Truck rolls avoided
+            </p>
+            <p className="mt-1 text-sm font-semibold text-amber-950">
+              {summary.blockedCount} of {summary.loadedJobCount} job{summary.loadedJobCount === 1 ? "" : "s"} had an
+              issue caught by a call before a technician would have been dispatched
+            </p>
+          </div>
+        )}
         <p className="text-[10px] leading-relaxed text-muted-foreground">
           Unreviewed is a human-review filter, not a readiness state. {newestBoundaryNote}.
         </p>
