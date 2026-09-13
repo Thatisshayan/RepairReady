@@ -8,6 +8,13 @@ on:
 jobs:
   verify:
     runs-on: ubuntu-latest
+    env:
+      # Publishable client identifiers, not secrets -- same values already committed in
+      # .env.example and protected server-side by RLS, not by being hidden. Needed because
+      # src/lib/supabase/client.ts throws at import time (a deliberate fail-fast, not something
+      # to work around) if these are unset, and that import is reached by the test/build steps.
+      VITE_SUPABASE_URL: https://pgcubmjosgfnqrwftosj.supabase.co
+      VITE_SUPABASE_PUBLISHABLE_KEY: sb_publishable_sRSnH3ezd-SiZYI7RBC5qA_IpwPGZAK
     steps:
       - uses: actions/checkout@v4
 
