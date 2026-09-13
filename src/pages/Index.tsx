@@ -66,9 +66,11 @@ import {
   loadRepairBrief,
   revokeBriefShareLink,
   saveRepairBrief,
+  saveRepairOutcome,
   type FollowUpReview,
   type HumanReviewState,
   type RepairBriefView,
+  type RepairOutcome,
 } from "@/lib/repair-briefs";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
@@ -578,6 +580,27 @@ const Index = () => {
       toast({
         title: "Brief review was not saved",
         description: friendlyError(err, "Could not save the private brief review. Try again."),
+        variant: "destructive",
+      });
+    } finally {
+      setBriefSaving(false);
+    }
+  };
+
+  const handleSaveOutcome = async (input: Pick<RepairOutcome, "actual_diagnosis" | "part_used" | "repair_completed" | "second_visit_required">) => {
+    if (!brief || briefSaving) return;
+    setBriefSaving(true);
+    try {
+      const saved = await saveRepairOutcome(brief, input);
+      setBrief(saved);
+      toast({
+        title: "Visit outcome recorded",
+        description: "This feeds the first-time-fix measurement. It does not change call evidence or readiness.",
+      });
+    } catch (err) {
+      toast({
+        title: "Outcome was not saved",
+        description: friendlyError(err, "Could not save the visit outcome. Try again."),
         variant: "destructive",
       });
     } finally {
@@ -1174,6 +1197,7 @@ const Index = () => {
                     briefError={briefError}
                     onRetryBrief={retryBrief}
                     onSaveBriefReview={handleSaveBriefReview}
+                    onSaveOutcome={handleSaveOutcome}
                     onCopyBriefSummary={handleCopyBriefSummary}
                     authorizedDemoActionState={demoActionState}
                     authorizedDemoMessage={demoActionMessage}

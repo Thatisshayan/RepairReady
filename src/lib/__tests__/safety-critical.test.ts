@@ -5,12 +5,18 @@ import {
   adaptiveQuestionsForJob,
   applianceSpecificQuestion,
   assessReadiness,
+  deriveContradictions,
+  deriveDiagnosisHypothesis,
+  deriveSafetyFlags,
+  firstTimeFixRate,
   hasSafetyHazard,
+  isFirstTimeFix,
   isSafetyHazardText,
   isShareLinkActive,
   targetedFollowUpQuestions,
   type BriefFollowUp,
   type EvidenceItem,
+  type RepairOutcome,
 } from "@/lib/repair-briefs";
 
 /**
@@ -209,11 +215,43 @@ describe("applianceSpecificQuestion / adaptiveQuestionsForJob — per-appliance 
     const withAppliance = adaptiveQuestionsForJob(testJob({ appliance_type: "oven_range" }));
     const without = adaptiveQuestionsForJob(testJob({ appliance_type: "other" }));
     expect(withAppliance.some((q) => /gas/i.test(q))).toBe(true);
-    // Regression guard: the cap must always be at least (base question count + 1), or the
-    // appliance-specific question silently pushes the final safety-boundary question off the end.
+    // Regression guard: adding the appliance-specific question must never push the trailing
+    // safety-boundary question off the end.
     expect(withAppliance.length).toBe(without.length + 1);
     expect(withAppliance.at(-1)).toMatch(/final checklist and review-only boundary/i);
     expect(without.at(-1)).toMatch(/final checklist and review-only boundary/i);
+  });
+
+  it("front-loads a safety-relevant appliance question ahead of the generic symptom questions", () => {
+    // If the call disconnects partway through, whatever ran first is what survives -- a gas-smell
+    // probe for a gas oven must not be the question that gets cut off.
+    const questions = adaptiveQuestionsForJob(testJob({ appliance_type: "oven_range" }));
+    const gasIndex = questions.findIndex((q) => /gas/i.test(q));
+    const symptomIndex = questions.findIndex((q) => /symptoms in the customer's own words/i.test(q));
+    expect(gasIndex).toBeGreaterThan(-1);
+    expect(gasIndex).toBeLessThan(symptomIndex);
+  });
+
+  it("stops re-asking the granular access breakdown once the coordinator already wrote a detailed access note", () => {
+    const detailed = testJob({
+      access_notes: "Third-floor condo, working elevator, street parking with 2hr limit, friendly dog kept in the bedroom, access Mon-Fri 9-5.",
+    });
+    const questions = adaptiveQuestionsForJob(detailed);
+    const joined = questions.join(" ").toLowerCase();
+    // The granular breakdown questions are gone...
+    expect(joined).not.toContain("ask about nearby parking or a loading zone");
+    expect(joined).not.toContain("ask whether pets are present");
+    // ...replaced by a single read-back/verification question.
+    expect(questions.some((q) => /read back the saved access notes in full/i.test(q))).toBe(true);
+    expect(questions.at(-1)).toMatch(/final checklist and review-only boundary/i);
+  });
+
+  it("still asks the full granular access breakdown when the access note is short or absent", () => {
+    const sparse = testJob({ access_notes: "3rd floor" });
+    const questions = adaptiveQuestionsForJob(sparse);
+    const joined = questions.join(" ").toLowerCase();
+    expect(joined).toContain("ask about nearby parking or a loading zone");
+    expect(questions.some((q) => /read back the saved access notes in full/i.test(q))).toBe(false);
   });
 });
 
@@ -232,6 +270,158 @@ describe("isShareLinkActive — gate on the public technician-facing link", () =
     expect(
       isShareLinkActive({ share_token: "abc", share_expires_at: new Date(Date.now() + 1000 * 60).toISOString() })
     ).toBe(true);
+  });
+});
+
+describe("deriveSafetyFlags — structuring hazard language into distinct escalation categories", () => {
+  it("categorizes a gas leak report separately from an electrical hazard report", () => {
+    const brief = { blockers: [{ value: "customer reports a gas leak near the dryer", source: "call_reported" as const, supporting_excerpt: null }], evidence: ALL_CONFIRMED };
+    const flags = deriveSafetyFlags(brief);
+    expect(flags).toHaveLength(1);
+    expect(flags[0].category).toBe("gas_or_carbon_monoxide");
+  });
+
+  it("captures multiple distinct hazard categories from separate sources", () => {
+    const brief = {
+      blockers: [{ value: "sparking outlet near the washer", source: "call_reported" as const, supporting_excerpt: null }],
+      evidence: [...ALL_CONFIRMED.slice(0, 4), evidence({ key: "symptoms", value: "standing water and flooding under the unit" })],
+    };
+    const flags = deriveSafetyFlags(brief);
+    const categories = flags.map((f) => f.category).sort();
+    expect(categories).toEqual(["fire_or_electrical", "flooding_or_water"]);
+  });
+
+  it("returns no flags for an ordinary access blocker or symptom", () => {
+    const brief = { blockers: [{ value: "no elevator access", source: "call_reported" as const, supporting_excerpt: null }], evidence: ALL_CONFIRMED };
+    expect(deriveSafetyFlags(brief)).toHaveLength(0);
+  });
+});
+
+const testJobForDiagnosis = (overrides: Partial<RepairJobRecord> = {}): RepairJobRecord => ({
+  id: "job-1",
+  customer_name: "Test Customer",
+  phone: SAFE_DEFAULT_PHONE,
+  appliance_type: "dryer",
+  reported_problem: "",
+  ...overrides,
+});
+
+describe("deriveContradictions — coordinator entry vs. call-confirmed answer", () => {
+  it("flags a materially different call-confirmed answer against the coordinator's entry", () => {
+    const job = testJobForDiagnosis({ reported_problem: "Making a squeaking noise" });
+    const contradictions = deriveContradictions(job, [evidence({ key: "symptoms", value: "Not heating at all, drum spins fine" })]);
+    expect(contradictions).toHaveLength(1);
+    expect(contradictions[0].key).toBe("symptoms");
+    expect(contradictions[0].coordinator_value).toContain("squeaking");
+    expect(contradictions[0].call_value).toContain("heating");
+  });
+
+  it("does not flag a paraphrase or added detail as a contradiction", () => {
+    const job = testJobForDiagnosis({ brand: "LG", model: "WM3900" });
+    const contradictions = deriveContradictions(job, [evidence({ key: "appliance_identity", value: "LG WM3900" })]);
+    expect(contradictions).toHaveLength(0);
+  });
+
+  it("does not flag anything when the call evidence is only uncertain, not confirmed", () => {
+    const job = testJobForDiagnosis({ error_code: "E1" });
+    const contradictions = deriveContradictions(job, [evidence({ key: "error_code", value: "E9", status: "uncertain" })]);
+    expect(contradictions).toHaveLength(0);
+  });
+
+  it("does not flag anything when the coordinator never entered a value for that field", () => {
+    const job = testJobForDiagnosis({});
+    const contradictions = deriveContradictions(job, [evidence({ key: "timing", value: "Only during the spin cycle" })]);
+    expect(contradictions).toHaveLength(0);
+  });
+});
+
+describe("deriveDiagnosisHypothesis — bounded, evidence-gated diagnostic reasoning", () => {
+  it("proposes a hypothesis when a symptom is confirmed by the call and matches a known pattern", () => {
+    const job = testJobForDiagnosis({ appliance_type: "dryer" });
+    const brief = {
+      blockers: [],
+      evidence: [
+        evidence({ key: "symptoms", value: "The dryer runs but produces no heat at all" }),
+        evidence({ key: "timing", value: "Every cycle" }),
+      ],
+    };
+    const hypothesis = deriveDiagnosisHypothesis(job, brief);
+    expect(hypothesis).not.toBeNull();
+    expect(hypothesis?.likely_subsystem).toBe("Heating circuit");
+    expect(hypothesis?.candidate_parts.length).toBeGreaterThan(0);
+    expect(hypothesis?.evidence_refs).toContain("symptoms");
+  });
+
+  it("never proposes a hypothesis when a safety hazard is present -- safety hold takes precedence", () => {
+    const job = testJobForDiagnosis({ appliance_type: "dryer" });
+    const brief = {
+      blockers: [{ value: "burning smell when it runs", source: "call_reported" as const, supporting_excerpt: null }],
+      evidence: [evidence({ key: "symptoms", value: "The dryer runs but produces no heat at all" })],
+    };
+    expect(deriveDiagnosisHypothesis(job, brief)).toBeNull();
+  });
+
+  it("abstains (returns null) rather than guessing when the symptom isn't call-confirmed", () => {
+    const job = testJobForDiagnosis({ appliance_type: "dryer" });
+    const brief = { blockers: [], evidence: [evidence({ key: "symptoms", value: "no heat", source: "coordinator", status: "unverified" })] };
+    expect(deriveDiagnosisHypothesis(job, brief)).toBeNull();
+  });
+
+  it("abstains when the confirmed symptom doesn't match any known pattern for the appliance", () => {
+    const job = testJobForDiagnosis({ appliance_type: "dryer" });
+    const brief = { blockers: [], evidence: [evidence({ key: "symptoms", value: "it makes a strange smell I can't describe" })] };
+    expect(deriveDiagnosisHypothesis(job, brief)).toBeNull();
+  });
+
+  it("raises confidence to high when the error code is also call-confirmed, and lowers it when timing is missing", () => {
+    const job = testJobForDiagnosis({ appliance_type: "washing_machine" });
+    const withErrorCode = deriveDiagnosisHypothesis(job, {
+      blockers: [],
+      evidence: [
+        evidence({ key: "symptoms", value: "Washer won't drain, water stays in the drum" }),
+        evidence({ key: "error_code", value: "E3" }),
+        evidence({ key: "timing", value: "Every wash" }),
+      ],
+    });
+    expect(withErrorCode?.confidence).toBe("high");
+
+    const withoutTiming = deriveDiagnosisHypothesis(job, {
+      blockers: [],
+      evidence: [
+        evidence({ key: "symptoms", value: "Washer won't drain, water stays in the drum" }),
+        evidence({ key: "timing", status: "missing", value: null, source: null }),
+      ],
+    });
+    expect(withoutTiming?.confidence).toBe("low");
+  });
+});
+
+function outcome(overrides: Partial<RepairOutcome> = {}): RepairOutcome {
+  return { actual_diagnosis: "Failed thermal fuse", part_used: "Thermal fuse", repair_completed: true, second_visit_required: false, recorded_at: new Date().toISOString(), ...overrides };
+}
+
+describe("isFirstTimeFix / firstTimeFixRate — the outcome metric", () => {
+  it("is null when there is no recorded outcome, never a false negative", () => {
+    expect(isFirstTimeFix(null)).toBeNull();
+  });
+
+  it("is true only when the repair was completed and no second visit is required", () => {
+    expect(isFirstTimeFix(outcome())).toBe(true);
+    expect(isFirstTimeFix(outcome({ second_visit_required: true }))).toBe(false);
+    expect(isFirstTimeFix(outcome({ repair_completed: false }))).toBe(false);
+  });
+
+  it("firstTimeFixRate returns null (not 0) when nothing has been recorded yet", () => {
+    expect(firstTimeFixRate([{ outcome: null }, { outcome: null }])).toBeNull();
+  });
+
+  it("only counts briefs with a recorded outcome toward the rate", () => {
+    const result = firstTimeFixRate([
+      { outcome: outcome() },
+      { outcome: outcome({ second_visit_required: true }) },
+      { outcome: null },
+    ]);
+    expect(result).toEqual({ recorded: 2, firstTimeFixes: 1, rate: 0.5 });
   });
 });
 

@@ -273,6 +273,16 @@ function hasText(value: unknown): boolean {
   return typeof value === "string" && value.trim().length > 0;
 }
 
+/** True when a still-editable, not-yet-approved draft already exists for the job. Guards the
+ * always-insert draft paths (retry/follow-up/post-visit) against creating a second "prepared"
+ * row that could independently be approved and dispatched alongside the first -- the DB also
+ * enforces this via a partial unique index (call_attempts_one_prepared_per_job) as the
+ * authoritative backstop against a race; this check exists to fail with a clear message instead
+ * of a raw constraint-violation error in the common, non-racing case. */
+function hasExistingPreparedAttempt(rows: CallAttemptDraft[]): boolean {
+  return rows.some((row) => String(row.lifecycle_status ?? "").trim() === "prepared");
+}
+
 /** Prevents local draft saving from clearing or replacing server-reserved state. */
 function hasReservedState(row: CallAttemptDraft): boolean {
   const approvalState = String(row.approval_state ?? "").trim();
@@ -380,6 +390,9 @@ export async function saveRetryCallAttemptDraft(job: RepairJobRecord): Promise<C
   if (!isCanonicalE164Phone(job.phone)) {
     throw new Error("Save the job with a canonical +countrycode phone before retrying a call.");
   }
+  if (hasExistingPreparedAttempt(await listDrafts(job.id))) {
+    throw new Error("A prepared draft already exists for this job. Approve, dispatch, or otherwise resolve it before preparing a retry.");
+  }
 
   const snapshot = buildCallRequestSnapshot(job);
   const payload = {
@@ -430,6 +443,9 @@ export async function saveFollowUpCallAttemptDraft(
   const questions = targetedFollowUpQuestions(brief);
   if (questions.length <= 2) {
     throw new Error("There are no unresolved follow-up details to prepare a targeted call about.");
+  }
+  if (hasExistingPreparedAttempt(await listDrafts(job.id))) {
+    throw new Error("A prepared draft already exists for this job. Approve, dispatch, or otherwise resolve it before preparing a follow-up call.");
   }
 
   const purpose = followUpPurposeForJob(job);
@@ -484,6 +500,9 @@ export async function savePostVisitCallAttemptDraft(job: RepairJobRecord): Promi
   if (!job.id) throw new Error("Select a saved repair job before preparing a post-visit call.");
   if (!isCanonicalE164Phone(job.phone)) {
     throw new Error("Save the job with a canonical +countrycode phone before preparing a post-visit call.");
+  }
+  if (hasExistingPreparedAttempt(await listDrafts(job.id))) {
+    throw new Error("A prepared draft already exists for this job. Approve, dispatch, or otherwise resolve it before preparing a post-visit call.");
   }
 
   const purpose = postVisitPurposeForJob(job);

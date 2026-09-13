@@ -30,7 +30,7 @@ import {
   type CallAttemptDraft,
 } from "@/lib/call-attempts";
 import { TechnicianBrief } from "@/components/repairready/TechnicianBrief";
-import { adaptiveQuestionsForJob, type FollowUpReview, type HumanReviewState, type RepairBriefView } from "@/lib/repair-briefs";
+import { adaptiveQuestionsForJob, type FollowUpReview, type HumanReviewState, type RepairBriefView, type RepairOutcome } from "@/lib/repair-briefs";
 import {
   applianceLabel,
   formatTimestamp,
@@ -55,6 +55,7 @@ interface JobDetailProps {
   briefError: string | null;
   onRetryBrief: () => void;
   onSaveBriefReview: (state: HumanReviewState, note: string, followUpReviews: FollowUpReview[]) => Promise<void>;
+  onSaveOutcome: (input: Pick<RepairOutcome, "actual_diagnosis" | "part_used" | "repair_completed" | "second_visit_required">) => Promise<void>;
   onCopyBriefSummary: () => Promise<void>;
   authorizedDemoActionState: "idle" | "loading" | AuthorizedDemoCallStatus;
   authorizedDemoMessage: string;
@@ -97,6 +98,7 @@ export function JobDetail({
   briefError,
   onRetryBrief,
   onSaveBriefReview,
+  onSaveOutcome,
   onCopyBriefSummary,
   authorizedDemoActionState,
   authorizedDemoMessage,
@@ -278,6 +280,7 @@ export function JobDetail({
             error={briefError}
             onRetry={onRetryBrief}
             onSaveReview={onSaveBriefReview}
+            onSaveOutcome={onSaveOutcome}
             onCopySummary={onCopyBriefSummary}
             shareLinkState={shareLinkState}
             shareLinkMessage={shareLinkMessage}

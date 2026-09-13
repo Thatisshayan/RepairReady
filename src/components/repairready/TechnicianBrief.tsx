@@ -12,6 +12,7 @@ import {
   Phone,
   Printer,
   ShieldAlert,
+  Wrench,
   X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -21,6 +22,10 @@ import { cn } from "@/lib/utils";
 import {
   completionLabel,
   demoFlowFor,
+  deriveContradictions,
+  deriveDiagnosisHypothesis,
+  deriveSafetyFlags,
+  diagnosticConfidenceLabel,
   evidenceSourceLabel,
   evidenceStatusLabel,
   followUpReviewLabel,
@@ -30,6 +35,7 @@ import {
   readinessDecisionFor,
   readinessLabel,
   readinessMetricsFor,
+  safetyFlagLabel,
   sanitizeFollowUpReviewNote,
   type DemoFlowStage,
   type DemoFlowStageState,
@@ -38,6 +44,7 @@ import {
   type HumanReviewState,
   type ReadinessDecisionTone,
   type RepairBriefView,
+  type RepairOutcome,
 } from "@/lib/repair-briefs";
 import { applianceLabel, type RepairJobRecord } from "@/lib/repair-jobs";
 
@@ -49,6 +56,7 @@ interface TechnicianBriefProps {
   error: string | null;
   onRetry: () => void;
   onSaveReview: (state: HumanReviewState, note: string, followUpReviews: FollowUpReview[]) => Promise<void>;
+  onSaveOutcome: (input: Pick<RepairOutcome, "actual_diagnosis" | "part_used" | "repair_completed" | "second_visit_required">) => Promise<void>;
   onCopySummary: () => Promise<void>;
   shareLinkState: "idle" | "loading" | "error";
   shareLinkMessage: string;
@@ -68,6 +76,7 @@ export function TechnicianBrief({
   error,
   onRetry,
   onSaveReview,
+  onSaveOutcome,
   onCopySummary,
   shareLinkState,
   shareLinkMessage,
@@ -123,6 +132,10 @@ export function TechnicianBrief({
           {!brief.evidence.some((item) => item.source === "call_reported") && <div className="rr-brief-screen-only mt-3 rounded-lg border border-border bg-background/70 px-3.5 py-3" role="status"><p className="text-sm font-semibold text-foreground">No call evidence yet</p><p className="mt-1 text-xs leading-relaxed text-muted-foreground">Coordinator entries are shown for preparation only. Confirmation requires a separately authorized call.</p></div>}
           <div className="mt-4 space-y-2.5"><div className="flex items-center justify-between gap-2"><div><p className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Required evidence</p><p className="mt-1 text-sm font-semibold text-foreground">What supports the brief today</p></div><span className="rr-status-chip border-border bg-background text-muted-foreground">{brief.evidence.filter((item) => item.status === "confirmed").length}/{brief.evidence.length} confirmed</span></div><ul className="space-y-2" aria-label="Required evidence items">{brief.evidence.map((item) => <EvidenceRow key={item.key} item={item} />)}</ul></div>
 
+          <SafetyFlagsBanner brief={brief} />
+          <ContradictionsPanel job={job} brief={brief} />
+          <DiagnosisHypothesisPanel job={job} brief={brief} />
+
           <div className="mt-4 rounded-lg border border-amber-500/25 bg-amber-50/80 p-3.5" aria-labelledby="follow-up-details-title">
             <div className="flex items-center gap-2"><ListChecks className="h-4 w-4 text-amber-700" aria-hidden /><p id="follow-up-details-title" className="text-sm font-semibold text-foreground">Follow-up details</p></div>
             <p className="mt-1 text-xs leading-relaxed text-amber-900/80">{brief.follow_ups.length ? "These details came from the call and still need independent confirmation." : "No specific call-reported follow-up details are saved."} Human review records coordinator attention only. It never changes call evidence or the calculated readiness.</p>
@@ -175,6 +188,10 @@ export function TechnicianBrief({
                 Prepare post-visit check-in call
               </Button>
             </div>
+          )}
+
+          {brief.call_completion_status === "completed" && (
+            <OutcomeSection outcome={brief.outcome} saving={saving} onSaveOutcome={onSaveOutcome} />
           )}
 
           <div className="mt-4 rounded-lg border border-border bg-background/70 p-3.5"><div className="flex items-center gap-2"><ShieldAlert className="h-4 w-4 text-amber-700" aria-hidden /><p className="text-sm font-semibold text-foreground">Visit blockers</p></div>{brief.blockers.length ? <ul className="mt-2 space-y-2">{brief.blockers.map((blocker, index) => { const hazard = isSafetyHazardText(blocker.value); return <li key={`${blocker.value}-${index}`} className={cn("rounded-md border px-2.5 py-2 text-sm", hazard ? "border-destructive/40 bg-destructive/10 text-destructive" : "border-amber-500/25 bg-amber-50 text-amber-950")}>{hazard && <span className="mb-1 inline-block rounded-full bg-destructive px-2 py-0.5 font-mono text-[9px] uppercase tracking-wide text-destructive-foreground">Safety hazard</span>}<span className="block">{blocker.value}</span><span className={cn("mt-1 block font-mono text-[10px] uppercase tracking-wide", hazard ? "text-destructive/75" : "text-amber-800/75")}>{evidenceSourceLabel(blocker.source)}{blocker.supporting_excerpt ? ` · “${blocker.supporting_excerpt}”` : ""}</span></li>; })}</ul> : <p className="mt-2 text-xs leading-relaxed text-muted-foreground">No blockers have been explicitly recorded. Missing information is shown above and is not treated as a blocker automatically.</p>}</div>
@@ -282,6 +299,118 @@ function ShareLinkSection({
         <p className="mt-2 text-xs leading-relaxed text-destructive" role="alert">
           {shareLinkMessage}
         </p>
+      )}
+    </div>
+  );
+}
+
+function SafetyFlagsBanner({ brief }: { brief: RepairBriefView }) {
+  const flags = deriveSafetyFlags(brief);
+  if (!flags.length) return null;
+  return (
+    <div className="mt-4 rounded-lg border border-destructive/40 bg-destructive/10 p-3.5" role="alert" aria-labelledby="safety-flags-title">
+      <div className="flex items-center gap-2"><ShieldAlert className="h-4 w-4 text-destructive" aria-hidden /><p id="safety-flags-title" className="text-sm font-semibold text-destructive">Safety hold — do not proceed with normal diagnosis</p></div>
+      <p className="mt-1 text-xs leading-relaxed text-destructive/90">A reported condition below needs review before anything else. Diagnostic reasoning is intentionally withheld while a safety flag is present.</p>
+      <ul className="mt-2 space-y-1.5" aria-label="Safety flags">
+        {flags.map((flag, index) => (
+          <li key={`${flag.category}-${index}`} className="rounded-md border border-destructive/30 bg-background/60 px-2.5 py-2 text-sm text-destructive">
+            <span className="mb-1 inline-block rounded-full bg-destructive px-2 py-0.5 font-mono text-[9px] uppercase tracking-wide text-destructive-foreground">{safetyFlagLabel(flag.category)}</span>
+            <span className="block text-foreground/90">{flag.detail}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function ContradictionsPanel({ job, brief }: { job: RepairJobRecord; brief: RepairBriefView }) {
+  const contradictions = deriveContradictions(job, brief.evidence);
+  if (!contradictions.length) return null;
+  return (
+    <div className="mt-4 rounded-lg border border-amber-500/30 bg-amber-50/80 p-3.5" aria-labelledby="contradictions-title">
+      <div className="flex items-center gap-2"><ListChecks className="h-4 w-4 text-amber-700" aria-hidden /><p id="contradictions-title" className="text-sm font-semibold text-foreground">Don't assume — coordinator entry vs. call-confirmed answer</p></div>
+      <p className="mt-1 text-xs leading-relaxed text-amber-900/80">The call confirmed something different from what was originally entered. Trust the call-confirmed value; the original entry is unverified.</p>
+      <ul className="mt-2 space-y-2" aria-label="Contradictions">
+        {contradictions.map((item) => (
+          <li key={item.key} className="rounded-md border border-amber-500/30 bg-background/70 px-2.5 py-2 text-sm">
+            <p className="font-medium text-foreground">{item.label}</p>
+            <p className="mt-1 text-xs text-muted-foreground">Coordinator entered: <span className="text-foreground/80">{item.coordinator_value}</span></p>
+            <p className="mt-0.5 text-xs text-muted-foreground">Call confirmed: <span className="font-medium text-foreground">{item.call_value}</span></p>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function DiagnosisHypothesisPanel({ job, brief }: { job: RepairJobRecord; brief: RepairBriefView }) {
+  const hypothesis = deriveDiagnosisHypothesis(job, brief);
+  if (!hypothesis) return null;
+  return (
+    <div className="mt-4 rounded-lg border border-primary/25 bg-primary/5 p-3.5" aria-labelledby="diagnosis-hypothesis-title">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2"><Wrench className="h-4 w-4 text-primary" aria-hidden /><p id="diagnosis-hypothesis-title" className="text-sm font-semibold text-foreground">Likely — diagnostic hypothesis</p></div>
+        <span className="rr-status-chip border-primary/25 bg-primary/10 text-primary">Confidence: {diagnosticConfidenceLabel(hypothesis.confidence)}</span>
+      </div>
+      <p className="mt-2 text-sm font-medium text-foreground">{hypothesis.likely_subsystem}</p>
+      <p className="mt-1 text-xs leading-relaxed text-muted-foreground">Based on {hypothesis.evidence_refs.length} confirmed evidence area{hypothesis.evidence_refs.length === 1 ? "" : "s"}. This is a hypothesis for the technician to verify on site — not a diagnosis, and not a guarantee.</p>
+      {hypothesis.candidate_parts.length > 0 && (
+        <div className="mt-3">
+          <p className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Bring — candidate parts to have on hand</p>
+          <ul className="mt-1.5 space-y-1.5" aria-label="Candidate parts">
+            {hypothesis.candidate_parts.map((part) => (
+              <li key={part.name} className="rounded-md border border-primary/20 bg-background/70 px-2.5 py-2 text-sm">
+                <p className="font-medium text-foreground">{part.name}</p>
+                <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">{part.reason}</p>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      <p className="mt-3 border-t border-primary/15 pt-2 text-xs italic leading-relaxed text-muted-foreground">Start here — verify this hypothesis on site before ordering parts or committing to a repair path.</p>
+    </div>
+  );
+}
+
+function OutcomeSection({
+  outcome,
+  saving,
+  onSaveOutcome,
+}: {
+  outcome: RepairOutcome | null;
+  saving: boolean;
+  onSaveOutcome: (input: Pick<RepairOutcome, "actual_diagnosis" | "part_used" | "repair_completed" | "second_visit_required">) => Promise<void>;
+}) {
+  const [actualDiagnosis, setActualDiagnosis] = useState(outcome?.actual_diagnosis ?? "");
+  const [partUsed, setPartUsed] = useState(outcome?.part_used ?? "");
+  const [repairCompleted, setRepairCompleted] = useState(outcome?.repair_completed ?? false);
+  const [secondVisitRequired, setSecondVisitRequired] = useState(outcome?.second_visit_required ?? false);
+
+  useEffect(() => {
+    setActualDiagnosis(outcome?.actual_diagnosis ?? "");
+    setPartUsed(outcome?.part_used ?? "");
+    setRepairCompleted(outcome?.repair_completed ?? false);
+    setSecondVisitRequired(outcome?.second_visit_required ?? false);
+  }, [outcome?.recorded_at, outcome?.actual_diagnosis, outcome?.part_used, outcome?.repair_completed, outcome?.second_visit_required]);
+
+  return (
+    <div className="mt-4 rounded-lg border border-border bg-background/70 p-3.5 sm:p-4" aria-labelledby="visit-outcome-title">
+      <div className="flex items-center gap-2"><Wrench className="h-4 w-4 text-foreground" aria-hidden /><p id="visit-outcome-title" className="text-sm font-semibold text-foreground">Visit outcome</p></div>
+      <p className="mt-1 text-xs leading-relaxed text-muted-foreground">What the technician actually found. This feeds the first-time-fix measurement — it doesn't change call evidence or readiness.</p>
+      <div className="mt-3 grid gap-3 sm:grid-cols-2">
+        <label className="space-y-1.5 text-sm font-medium text-foreground">Actual diagnosis<Input value={actualDiagnosis} onChange={(e) => setActualDiagnosis(e.target.value.slice(0, 300))} maxLength={300} placeholder="e.g. Failed thermal fuse" className="mt-1.5 bg-background text-sm font-normal" /></label>
+        <label className="space-y-1.5 text-sm font-medium text-foreground">Part used<Input value={partUsed} onChange={(e) => setPartUsed(e.target.value.slice(0, 160))} maxLength={160} placeholder="e.g. Thermal fuse" className="mt-1.5 bg-background text-sm font-normal" /></label>
+      </div>
+      <div className="mt-3 flex flex-wrap gap-4">
+        <label className="flex items-center gap-2 text-sm text-foreground"><input type="checkbox" checked={repairCompleted} onChange={(e) => setRepairCompleted(e.target.checked)} className="h-4 w-4 rounded border-input" />Repair completed this visit</label>
+        <label className="flex items-center gap-2 text-sm text-foreground"><input type="checkbox" checked={secondVisitRequired} onChange={(e) => setSecondVisitRequired(e.target.checked)} className="h-4 w-4 rounded border-input" />Second visit required</label>
+      </div>
+      <Button type="button" size="sm" variant="outline" className="mt-3 bg-card" disabled={saving} onClick={() => void onSaveOutcome({ actual_diagnosis: actualDiagnosis, part_used: partUsed, repair_completed: repairCompleted, second_visit_required: secondVisitRequired })}>
+        {saving ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" aria-hidden /> : <CheckCircle2 className="mr-1.5 h-3.5 w-3.5" aria-hidden />}
+        Save visit outcome
+      </Button>
+      {outcome && (
+        <p className="mt-2 text-xs text-muted-foreground">Last recorded {new Date(outcome.recorded_at).toLocaleString()}.</p>
       )}
     </div>
   );

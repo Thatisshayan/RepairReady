@@ -32,6 +32,7 @@ const QUEUE_SENSITIVE_RE = /(?:alarm|security|door|entry|access|gate|building|lo
 
 function queueText(value: unknown, max: number): string {
   if (typeof value !== "string") return "";
+  // eslint-disable-next-line no-control-regex -- deliberately stripping control characters from untrusted text before storage/display.
   const normalized = value.replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, max);
   if (!normalized) return "";
   if (QUEUE_SENSITIVE_RE.test(normalized)) return "[sensitive detail omitted]";

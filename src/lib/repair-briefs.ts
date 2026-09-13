@@ -53,6 +53,17 @@ export interface FollowUpReview {
   status: FollowUpReviewStatus;
   note: string;
 }
+/** What actually happened on the visit, entered by the coordinator or technician after the fact.
+ * Deliberately minimal -- this exists to compute first-time-fix, not to become a full work-order
+ * system. */
+export interface RepairOutcome {
+  actual_diagnosis: string;
+  part_used: string;
+  repair_completed: boolean;
+  second_visit_required: boolean;
+  recorded_at: string;
+}
+
 export interface RepairBriefView {
   id?: string;
   repair_job_id: string;
@@ -66,6 +77,7 @@ export interface RepairBriefView {
   follow_ups: BriefFollowUp[];
   follow_up_reviews: FollowUpReview[];
   blockers: BriefBlocker[];
+  outcome: RepairOutcome | null;
   safe_summary: string;
   share_token?: string | null;
   share_expires_at?: string | null;
@@ -101,7 +113,167 @@ export function hasSafetyHazard(brief: Pick<RepairBriefView, "blockers" | "evide
   return brief.evidence.some((item) => item.key === "symptoms" && isSafetyHazardText(item.value));
 }
 
+// ---------------------------------------------------------------------------
+// Diagnostic evidence model: safety flags, contradictions, and a bounded,
+// rule-based diagnostic hypothesis. Everything here is derived on the fly from
+// already-stored evidence and job fields -- nothing new is persisted, and
+// nothing here ever asks CALL-E's live agent to diagnose anything (that
+// boundary is intentional, see PREPARATION_TASK in dispatch-calle-call).
+// ---------------------------------------------------------------------------
+
+export type SafetyFlagCategory = "gas_or_carbon_monoxide" | "fire_or_electrical" | "flooding_or_water";
+export interface SafetyFlag {
+  category: SafetyFlagCategory;
+  source: EvidenceSource;
+  detail: string;
+}
+const SAFETY_CATEGORY_PATTERNS: Array<{ category: SafetyFlagCategory; re: RegExp }> = [
+  { category: "gas_or_carbon_monoxide", re: /\bgas\s*(leak|smell|odor)\b|\bsmells?\s*(of|like)\s*gas\b|\bcarbon\s*monoxide\b|\bco\s*(detector|alarm)\b/i },
+  { category: "fire_or_electrical", re: /\bsmoke\b|\bfire\b|\bsparking\b|\bspark(s|ed)?\s*(from|out)\b|\bexposed\s*wir(e|ing)\b|\blive\s*wire\b|\belectric(al)?\s*shock\b|\belectrocut\w*\b|\bburning\s*smell\b|\bsmells?\s*(like\s*)?(it'?s\s*)?burning\b/i },
+  { category: "flooding_or_water", re: /\bflooding\b|\bwater\s*damage\b|\bstanding\s*water\b|\bmold\b/i },
+];
+
+/** Structures the same hazard language `hasSafetyHazard` already detects into distinct,
+ * escalation-ready categories instead of one boolean. A single report can match more than one
+ * category (e.g. "sparking near standing water"). */
+export function deriveSafetyFlags(brief: Pick<RepairBriefView, "blockers" | "evidence">): SafetyFlag[] {
+  const candidates: Array<{ value: string | null; source: EvidenceSource | null }> = [
+    ...brief.blockers.map((b) => ({ value: b.value, source: b.source as EvidenceSource | null })),
+    ...brief.evidence.filter((item) => item.key === "symptoms").map((item) => ({ value: item.value, source: item.source })),
+  ];
+  const flags: SafetyFlag[] = [];
+  const seen = new Set<string>();
+  for (const candidate of candidates) {
+    if (!candidate.value || !candidate.source) continue;
+    for (const { category, re } of SAFETY_CATEGORY_PATTERNS) {
+      if (!re.test(candidate.value)) continue;
+      const dedupeKey = `${category}:${candidate.source}`;
+      if (seen.has(dedupeKey)) continue;
+      seen.add(dedupeKey);
+      flags.push({ category, source: candidate.source, detail: candidate.value });
+    }
+  }
+  return flags;
+}
+export function safetyFlagLabel(category: SafetyFlagCategory): string {
+  if (category === "gas_or_carbon_monoxide") return "Gas or carbon monoxide";
+  if (category === "fire_or_electrical") return "Fire or electrical hazard";
+  return "Flooding or water damage";
+}
+
+export interface Contradiction {
+  key: EvidenceKey;
+  label: string;
+  coordinator_value: string;
+  call_value: string;
+}
+function normalizeForCompare(value: string): string {
+  return value.trim().toLowerCase().replace(/\s+/g, " ");
+}
+/** True when neither string is a near-substring of the other -- a deliberately loose check so
+ * paraphrasing or added detail ("LG washer" vs "LG WM3900") doesn't get flagged as a conflict,
+ * while an actually different answer ("gas dryer" vs "electric dryer") does. */
+function materiallyDifferent(a: string, b: string): boolean {
+  const x = normalizeForCompare(a);
+  const y = normalizeForCompare(b);
+  if (!x || !y) return false;
+  return !x.includes(y) && !y.includes(x);
+}
+const COORDINATOR_FIELD_FOR_KEY: Partial<Record<EvidenceKey, (job: RepairJobRecord) => string>> = {
+  appliance_identity: (job) => [job.brand, job.model].filter(Boolean).join(" ").trim(),
+  symptoms: (job) => (job.reported_problem ?? "").trim(),
+  timing: (job) => (job.symptom_timing ?? "").trim(),
+  error_code: (job) => (job.error_code ?? "").trim(),
+  visit_logistics: (job) => (job.access_notes ?? "").trim(),
+};
+
+/** Flags an evidence area where the coordinator's original entry and the call-confirmed answer
+ * materially disagree. This operationalizes the brief's core promise -- a coordinator guess that
+ * turns out wrong should be visibly caught, not silently overwritten. Only fires against
+ * `confirmed` call evidence; an `uncertain`/`unverified` call answer isn't a strong enough basis
+ * to accuse the coordinator's entry of being wrong. */
+export function deriveContradictions(job: RepairJobRecord, evidence: EvidenceItem[]): Contradiction[] {
+  return evidence.flatMap((item) => {
+    if (item.source !== "call_reported" || item.status !== "confirmed" || !item.value) return [];
+    const coordinatorValue = COORDINATOR_FIELD_FOR_KEY[item.key]?.(job) ?? "";
+    if (!coordinatorValue || !materiallyDifferent(coordinatorValue, item.value)) return [];
+    return [{ key: item.key, label: LABELS[item.key], coordinator_value: coordinatorValue, call_value: item.value }];
+  });
+}
+
+export type DiagnosticConfidence = "low" | "medium" | "high";
+export interface CandidatePart {
+  name: string;
+  reason: string;
+}
+export interface DiagnosisHypothesis {
+  likely_subsystem: string;
+  confidence: DiagnosticConfidence;
+  candidate_parts: CandidatePart[];
+  evidence_refs: EvidenceKey[];
+}
+interface SymptomRule {
+  test: RegExp;
+  likely_subsystem: string;
+  candidate_parts: CandidatePart[];
+}
+const SYMPTOM_RULES: Partial<Record<RepairJobRecord["appliance_type"], SymptomRule[]>> = {
+  washing_machine: [
+    { test: /not\s*drain|won'?t\s*drain|water\s*(stays|remains|left)/i, likely_subsystem: "Drain system", candidate_parts: [{ name: "Drain pump", reason: "Most common cause of a washer that fills but will not drain." }, { name: "Drain hose", reason: "A kinked or clogged hose produces the same symptom as a failed pump." }] },
+    { test: /leak/i, likely_subsystem: "Door seal or hose connections", candidate_parts: [{ name: "Door boot seal", reason: "Front-load washer leaks are frequently a torn or dirty door seal." }, { name: "Inlet/drain hose connections", reason: "Loose or worn hose fittings are a common secondary leak source." }] },
+    { test: /not\s*spin|won'?t\s*spin|stopped\s*spinning/i, likely_subsystem: "Drive system", candidate_parts: [{ name: "Lid or door switch", reason: "A failed switch prevents spin as a safety interlock, independent of the motor." }, { name: "Drive belt", reason: "A worn or broken belt is a common mechanical cause of no spin." }] },
+  ],
+  dryer: [
+    { test: /(no|not|won'?t)\s*heat|not\s*heating|cold\s*air/i, likely_subsystem: "Heating circuit", candidate_parts: [{ name: "Heating element / heating assembly", reason: "Primary suspect for a dryer that tumbles but produces no heat." }, { name: "Thermal fuse", reason: "A tripped thermal fuse cuts heat while leaving the drum motor running." }] },
+    { test: /not\s*(spin|turn|tumbl)/i, likely_subsystem: "Drive system", candidate_parts: [{ name: "Drive belt", reason: "A broken belt is the most common cause of a drum that won't turn." }] },
+  ],
+  dishwasher: [
+    { test: /not\s*drain|won'?t\s*drain|standing\s*water/i, likely_subsystem: "Drain system", candidate_parts: [{ name: "Drain pump", reason: "Most common cause of standing water at the end of a cycle." }, { name: "Air gap / drain hose", reason: "A clogged air gap or hose produces the same symptom." }] },
+    { test: /leak/i, likely_subsystem: "Door seal or spray arm", candidate_parts: [{ name: "Door gasket", reason: "A worn door gasket is the most common dishwasher leak source." }] },
+  ],
+  refrigerator: [
+    { test: /not\s*cool|not\s*cold|warm(ing)?/i, likely_subsystem: "Cooling system", candidate_parts: [{ name: "Condenser coils", reason: "Dirty or blocked coils are the most common, cheapest-to-check cause of poor cooling." }, { name: "Evaporator fan", reason: "A failed fan prevents cold air from circulating even if cooling is otherwise working." }] },
+  ],
+  oven_range: [
+    { test: /not\s*heat|won'?t\s*heat|not\s*(turning|getting)\s*(on|hot)/i, likely_subsystem: "Heating circuit", candidate_parts: [{ name: "Igniter (gas) or heating element (electric)", reason: "Primary suspect for an oven that will not heat, depending on fuel type." }] },
+  ],
+};
+
+/** A bounded, deterministic hypothesis derived only from already call-confirmed evidence -- never
+ * from an unverified coordinator guess, and never when a safety hazard is present (a safety hold
+ * takes precedence over ordinary diagnostic reasoning). Returns null rather than force a guess
+ * when there isn't a confident enough match: absence of a hypothesis is a valid, honest outcome,
+ * not a bug. Always label results as a hypothesis for the technician to verify, never a diagnosis. */
+export function deriveDiagnosisHypothesis(job: RepairJobRecord, brief: Pick<RepairBriefView, "blockers" | "evidence">): DiagnosisHypothesis | null {
+  if (deriveSafetyFlags(brief).length > 0) return null;
+  const symptomItem = brief.evidence.find((item) => item.key === "symptoms");
+  if (!symptomItem || symptomItem.source !== "call_reported" || symptomItem.status !== "confirmed" || !symptomItem.value) return null;
+  const rules = SYMPTOM_RULES[job.appliance_type as RepairJobRecord["appliance_type"]];
+  const match = rules?.find((rule) => rule.test.test(symptomItem.value as string));
+  if (!match) return null;
+
+  const errorCodeItem = brief.evidence.find((item) => item.key === "error_code");
+  const timingItem = brief.evidence.find((item) => item.key === "timing");
+  const evidenceRefs: EvidenceKey[] = ["symptoms"];
+  let confidence: DiagnosticConfidence = "medium";
+  if (errorCodeItem?.source === "call_reported" && errorCodeItem.status === "confirmed" && errorCodeItem.value) {
+    evidenceRefs.push("error_code");
+    confidence = "high";
+  }
+  if (!timingItem || timingItem.status === "missing" || timingItem.status === "uncertain") {
+    confidence = confidence === "high" ? "medium" : "low";
+  } else {
+    evidenceRefs.push("timing");
+  }
+
+  return { likely_subsystem: match.likely_subsystem, confidence, candidate_parts: match.candidate_parts, evidence_refs: evidenceRefs };
+}
+export function diagnosticConfidenceLabel(confidence: DiagnosticConfidence): string {
+  return confidence === "high" ? "High" : confidence === "medium" ? "Medium" : "Low";
+}
+
 function text(value: unknown, max: number): string {
+  // eslint-disable-next-line no-control-regex -- deliberately stripping control characters from untrusted text before storage/display.
   return typeof value === "string" ? value.replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, max) : "";
 }
 function safeBriefText(value: unknown, max: number): string {
@@ -526,32 +698,150 @@ export function applianceSpecificQuestion(applianceType: RepairJobRecord["applia
   return APPLIANCE_SPECIFIC_QUESTIONS[applianceType] ?? null;
 }
 
-export function adaptiveQuestionsForJob(job: RepairJobRecord): string[] {
-  const questions = ["Confirm you are speaking with the intended customer and that they agree to a short preparation conversation. Do not ask for passwords or access codes."];
-  questions.push(job.brand?.trim() && job.model?.trim() ? "Read back the saved appliance brand and full model number, then ask the customer to correct either one if needed." : "Ask the customer to read the appliance brand and full model number exactly as shown on the appliance.");
-  questions.push("Ask for the symptoms in the customer's own words. If the description is broad, ask one neutral follow-up for what the sound or sensation is like and what the appliance is doing when it starts. Preserve their words and do not suggest a cause or repair.");
-  questions.push("Separate the trigger from the operating moment: ask whether it starts while loading or turning the appliance on, then whether it happens during fill, wash, drain, spin, or another clearly described moment, and how consistently.");
+/**
+ * Detailed enough that asking the granular access breakdown again would mostly re-confirm
+ * rather than discover anything -- a coordinator who already wrote a real paragraph gets one
+ * verification question instead of six granular ones. Deliberately conservative (a short note
+ * like "3rd floor" still triggers the full breakdown) so nothing genuinely unknown gets skipped.
+ */
+function hasDetailedAccessNotes(job: RepairJobRecord): boolean {
+  return (job.access_notes ?? "").trim().length >= 40;
+}
+
+/**
+ * Ordered by diagnostic/safety priority, not interview convenience: if the call disconnects
+ * partway through (hang-up, dropped line, voicemail cutoff), whatever ran first is what survives.
+ * Safety-relevant and high-value questions are front-loaded; verification and access-logistics
+ * detail come later since losing those costs a follow-up call, not a missed hazard.
+ *
+ * `skip` lets a question drop out entirely when the coordinator's intake already answered it in
+ * enough detail that re-asking would only re-confirm, not discover -- the interview's stopping
+ * criterion. Everything else is always asked, even when partially known, because CALL-E's live
+ * confirmation is the thing that actually moves an evidence area from "coordinator-entered" to
+ * "call-confirmed."
+ */
+function adaptiveQuestionPlan(job: RepairJobRecord): Array<{ safetyRelevant: boolean; skip?: boolean; text: string }> {
   const applianceQuestion = applianceSpecificQuestion(job.appliance_type);
-  if (applianceQuestion) questions.push(applianceQuestion);
-  questions.push(job.error_code?.trim() ? "Read back the saved error code and ask the customer to confirm it or explicitly say that no code is displayed. Never infer none from silence." : "Ask whether an error code is displayed. If none is visible, record an explicit no-error-code answer rather than inferring one.");
-  questions.push("Review or ask separately whether the building is a condo or apartment or another type. Capture a floor or unit only when appropriate for the private job, and never request a door, entry, alarm, security code, PIN, password, or credential.");
-  questions.push("Ask separately whether an elevator or stairs are needed, whether any route is narrow or restricted, and whether the route to the appliance and the available workspace are clear.");
-  questions.push("Ask about nearby parking or a loading zone, including rules, time limits, permits, or validation.");
-  questions.push("Ask whether pets are present and what safe access plan the technician should follow.");
-  questions.push("Ask for the exact days and hours when access is available and any blackout times. Treat this as an access window, not a scheduled appointment.");
-  questions.push("Ask how concierge registration works, whether advance notice or lead time is required, and whether the technician must bring a business card or other non-sensitive business identification.");
-  questions.push("Ask whether the participant explicitly cannot provide access or whether an unresolved requirement would prevent the visit. Put ordinary requirements in access_constraints, unknown details as unknown or incomplete, and only explicit blockers in visit_blockers. If no blocker is explicitly stated, leave visit_blockers empty.");
-  questions.push("Final checklist and review-only boundary: verify every material answer is explicit. Record each unresolved or vague material answer as a missing detail and mark the result incomplete or uncertain instead of silently treating it as complete. This outline does not place a call or edit call evidence. Never diagnose, give repair advice, schedule, take payment, or request codes, passwords, credentials, or other sensitive access information.");
-  // Capped at one more than the previous 13 -- exactly enough for the added appliance-specific
-  // question (12 base questions + 1 appliance-specific) without ever truncating the trailing
-  // safety/review-boundary question above, which must always survive the cap.
-  return questions.slice(0, 14);
+  return [
+    {
+      safetyRelevant: false,
+      text: "Confirm you are speaking with the intended customer and that they agree to a short preparation conversation. Do not ask for passwords or access codes.",
+    },
+    {
+      safetyRelevant: false,
+      text: job.brand?.trim() && job.model?.trim()
+        ? "Read back the saved appliance brand and full model number, then ask the customer to correct either one if needed."
+        : "Ask the customer to read the appliance brand and full model number exactly as shown on the appliance.",
+    },
+    // Appliance-specific probes (gas smell, burning smell, vent condition) are frequently the
+    // single highest safety-relevance question in the whole outline -- asked right after identity
+    // so it survives even a call that disconnects early.
+    ...(applianceQuestion ? [{ safetyRelevant: true, text: applianceQuestion }] : []),
+    {
+      safetyRelevant: false,
+      text: "Ask for the symptoms in the customer's own words. If the description is broad, ask one neutral follow-up for what the sound or sensation is like and what the appliance is doing when it starts. Preserve their words and do not suggest a cause or repair.",
+    },
+    {
+      safetyRelevant: false,
+      text: "Separate the trigger from the operating moment: ask whether it starts while loading or turning the appliance on, then whether it happens during fill, wash, drain, spin, or another clearly described moment, and how consistently.",
+    },
+    {
+      safetyRelevant: false,
+      text: job.error_code?.trim()
+        ? "Read back the saved error code and ask the customer to confirm it or explicitly say that no code is displayed. Never infer none from silence."
+        : "Ask whether an error code is displayed. If none is visible, record an explicit no-error-code answer rather than inferring one.",
+    },
+    {
+      safetyRelevant: false,
+      skip: hasDetailedAccessNotes(job),
+      text: "Review or ask separately whether the building is a condo or apartment or another type. Capture a floor or unit only when appropriate for the private job, and never request a door, entry, alarm, security code, PIN, password, or credential.",
+    },
+    {
+      safetyRelevant: false,
+      skip: hasDetailedAccessNotes(job),
+      text: "Ask separately whether an elevator or stairs are needed, whether any route is narrow or restricted, and whether the route to the appliance and the available workspace are clear.",
+    },
+    {
+      safetyRelevant: false,
+      skip: hasDetailedAccessNotes(job),
+      text: "Ask about nearby parking or a loading zone, including rules, time limits, permits, or validation.",
+    },
+    {
+      safetyRelevant: false,
+      skip: hasDetailedAccessNotes(job),
+      text: "Ask whether pets are present and what safe access plan the technician should follow.",
+    },
+    {
+      safetyRelevant: false,
+      skip: hasDetailedAccessNotes(job),
+      text: "Ask for the exact days and hours when access is available and any blackout times. Treat this as an access window, not a scheduled appointment.",
+    },
+    {
+      safetyRelevant: false,
+      skip: hasDetailedAccessNotes(job),
+      text: "Ask how concierge registration works, whether advance notice or lead time is required, and whether the technician must bring a business card or other non-sensitive business identification.",
+    },
+    // Read back only when the granular breakdown above was skipped -- otherwise this would just
+    // duplicate the six questions it replaces.
+    ...(hasDetailedAccessNotes(job)
+      ? [{
+          safetyRelevant: false,
+          text: "Read back the saved access notes in full and ask the customer to confirm them or correct anything that has changed, covering building type, elevator or stairs, parking, pets, access hours, and any concierge or registration step.",
+        }]
+      : []),
+    {
+      safetyRelevant: false,
+      text: "Ask whether the participant explicitly cannot provide access or whether an unresolved requirement would prevent the visit. Put ordinary requirements in access_constraints, unknown details as unknown or incomplete, and only explicit blockers in visit_blockers. If no blocker is explicitly stated, leave visit_blockers empty.",
+    },
+    {
+      safetyRelevant: false,
+      text: "Final checklist and review-only boundary: verify every material answer is explicit. Record each unresolved or vague material answer as a missing detail and mark the result incomplete or uncertain instead of silently treating it as complete. This outline does not place a call or edit call evidence. Never diagnose, give repair advice, schedule, take payment, or request codes, passwords, credentials, or other sensitive access information.",
+    },
+  ];
+}
+
+export function adaptiveQuestionsForJob(job: RepairJobRecord): string[] {
+  return adaptiveQuestionPlan(job)
+    .filter((item) => !item.skip)
+    .map((item) => item.text);
+}
+
+function sanitizeOutcome(raw: unknown): RepairOutcome | null {
+  const row = raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : null;
+  if (!row) return null;
+  const recordedAt = text(row.recorded_at, 80);
+  if (!recordedAt) return null;
+  return {
+    actual_diagnosis: safeBriefText(row.actual_diagnosis, 300),
+    part_used: safeBriefText(row.part_used, 160),
+    repair_completed: row.repair_completed === true,
+    second_visit_required: row.second_visit_required === true,
+    recorded_at: recordedAt,
+  };
+}
+
+/** A repair is only "first-time-fix" if it was completed on this visit AND no second visit is
+ * required for the same issue. Absence of a recorded outcome is not treated as either yes or no. */
+export function isFirstTimeFix(outcome: RepairOutcome | null): boolean | null {
+  if (!outcome) return null;
+  return outcome.repair_completed && !outcome.second_visit_required;
+}
+
+/** Aggregate first-time-fix rate over a set of briefs. Only briefs with a recorded outcome count
+ * toward the denominator -- jobs still in progress don't silently drag the rate down. Returns
+ * null (not 0) when nothing has been recorded yet, so the UI can say "not enough data" instead of
+ * a misleading 0%. */
+export function firstTimeFixRate(briefs: Array<Pick<RepairBriefView, "outcome">>): { recorded: number; firstTimeFixes: number; rate: number } | null {
+  const recorded = briefs.flatMap((b) => (b.outcome ? [b.outcome] : []));
+  if (!recorded.length) return null;
+  const firstTimeFixes = recorded.filter((o) => isFirstTimeFix(o) === true).length;
+  return { recorded: recorded.length, firstTimeFixes, rate: firstTimeFixes / recorded.length };
 }
 
 export function buildBriefPreview(job: RepairJobRecord, attempt?: { id?: string; provider_status?: string | null } | null): RepairBriefView {
   const evidence = localEvidence(job);
   const completion = callCompletionFromAttempt(attempt);
-  const view: RepairBriefView = { repair_job_id: job.id, call_attempt_id: text(attempt?.id, LIMITS.id), call_completion_status: completion, readiness_status: "unknown", human_review_state: "not_reviewed", human_review_note: "", reviewed_at: "", evidence, follow_ups: [], follow_up_reviews: [], blockers: [], safe_summary: "", share_token: null, share_expires_at: null };
+  const view: RepairBriefView = { repair_job_id: job.id, call_attempt_id: text(attempt?.id, LIMITS.id), call_completion_status: completion, readiness_status: "unknown", human_review_state: "not_reviewed", human_review_note: "", reviewed_at: "", evidence, follow_ups: [], follow_up_reviews: [], blockers: [], outcome: null, safe_summary: "", share_token: null, share_expires_at: null };
   view.readiness_status = assessReadiness(evidence, [], completion, view.follow_ups);
   view.safe_summary = buildSafeBriefSummary(view, job);
   return view;
@@ -572,12 +862,12 @@ function normalizeStored(raw: RepairBriefRecordLike, job: RepairJobRecord, attem
   const attemptCompletion = callCompletionFromAttempt(attempt);
   const hasAttemptStatus = typeof attempt?.provider_status === "string" && attempt.provider_status.trim().length > 0;
   const completion = hasAttemptStatus ? attemptCompletion : normalizeCompletion(raw.call_completion_status, attemptCompletion);
-  const view: RepairBriefView = { id: text(raw.id, LIMITS.id) || undefined, repair_job_id: job.id, call_attempt_id: text(raw.call_attempt_id, LIMITS.id) || text(attempt?.id, LIMITS.id), call_completion_status: completion, readiness_status: "unknown", human_review_state: normalizeReviewState(raw.human_review_state), human_review_note: safeBriefText(raw.human_review_note, LIMITS.note), reviewed_at: text(raw.reviewed_at, 80), evidence, follow_ups: followUps, follow_up_reviews: followUpReviews, blockers, safe_summary: "", share_token: typeof raw.share_token === "string" && raw.share_token ? raw.share_token : null, share_expires_at: typeof raw.share_expires_at === "string" && raw.share_expires_at ? raw.share_expires_at : null, updated_at: raw.updated_at, updated_date: raw.updated_date };
+  const view: RepairBriefView = { id: text(raw.id, LIMITS.id) || undefined, repair_job_id: job.id, call_attempt_id: text(raw.call_attempt_id, LIMITS.id) || text(attempt?.id, LIMITS.id), call_completion_status: completion, readiness_status: "unknown", human_review_state: normalizeReviewState(raw.human_review_state), human_review_note: safeBriefText(raw.human_review_note, LIMITS.note), reviewed_at: text(raw.reviewed_at, 80), evidence, follow_ups: followUps, follow_up_reviews: followUpReviews, blockers, outcome: sanitizeOutcome(parseStoredJson(raw.outcome_json, 1200)), safe_summary: "", share_token: typeof raw.share_token === "string" && raw.share_token ? raw.share_token : null, share_expires_at: typeof raw.share_expires_at === "string" && raw.share_expires_at ? raw.share_expires_at : null, updated_at: raw.updated_at, updated_date: raw.updated_date };
   view.readiness_status = assessReadiness(evidence, view.blockers, completion, followUps);
   view.safe_summary = buildSafeBriefSummary(view, job);
   return view;
 }
-type RepairBriefRecordLike = Partial<RepairBriefView> & { evidence_json?: string; blockers_json?: string; follow_up_json?: string; follow_up_review_json?: string; id?: string; call_attempt_id?: string; call_completion_status?: string; human_review_state?: string; human_review_note?: string; reviewed_at?: string };
+type RepairBriefRecordLike = Partial<RepairBriefView> & { evidence_json?: string; blockers_json?: string; follow_up_json?: string; follow_up_review_json?: string; outcome_json?: string; id?: string; call_attempt_id?: string; call_completion_status?: string; human_review_state?: string; human_review_note?: string; reviewed_at?: string };
 
 /**
  * Selects and normalizes the newest saved brief for a queue item in one bulk read.
@@ -639,11 +929,29 @@ export async function saveRepairBrief(job: RepairJobRecord, current: RepairBrief
   const reviewState = normalizeReviewState(options.human_review_state);
   const reviewNote = safeBriefText(options.human_review_note, LIMITS.note);
   const reviewedAt = reviewState === "not_reviewed" ? "" : new Date().toISOString();
-  const snapshot: RepairBriefView = { id: text(existing?.id, LIMITS.id) || undefined, repair_job_id: job.id, call_attempt_id: attemptId, call_completion_status: completion, readiness_status: assessReadiness(evidence, blockers, completion, followUps), human_review_state: reviewState, human_review_note: reviewNote, reviewed_at: reviewedAt, evidence, follow_ups: followUps, follow_up_reviews: followUpReviews, blockers, safe_summary: "" };
+  const outcome = existing ? sanitizeOutcome(parseStoredJson(existing.outcome_json, 1200)) : null;
+  const snapshot: RepairBriefView = { id: text(existing?.id, LIMITS.id) || undefined, repair_job_id: job.id, call_attempt_id: attemptId, call_completion_status: completion, readiness_status: assessReadiness(evidence, blockers, completion, followUps), human_review_state: reviewState, human_review_note: reviewNote, reviewed_at: reviewedAt, evidence, follow_ups: followUps, follow_up_reviews: followUpReviews, blockers, outcome, safe_summary: "" };
   snapshot.safe_summary = buildSafeBriefSummary(snapshot, job);
   const payload = { repair_job_id: job.id, call_attempt_id: attemptId, call_completion_status: completion, readiness_status: snapshot.readiness_status, human_review_state: reviewState, human_review_note: reviewNote, reviewed_at: reviewedAt, evidence_json: JSON.stringify(evidence), blockers_json: JSON.stringify(blockers), follow_up_json: JSON.stringify(followUps).slice(0, LIMITS.followUpJson), follow_up_review_json: JSON.stringify(followUpReviews).slice(0, LIMITS.followUpReviewJson), safe_summary: snapshot.safe_summary.slice(0, LIMITS.summary) };
   const saved = existing ? await RepairBrief.update(String(existing.id), payload) : await RepairBrief.create(payload);
   return normalizeStored({ ...(existing ?? {}), ...(saved as RepairBriefRecordLike), ...payload }, job, { id: attemptId });
+}
+
+/** Records (or replaces) the post-visit outcome on an already-saved brief. Separate from
+ * saveRepairBrief because outcome capture is a distinct action from human review -- a coordinator
+ * reviewing a brief shouldn't accidentally overwrite an outcome, and recording an outcome
+ * shouldn't require re-submitting review state. */
+export async function saveRepairOutcome(brief: RepairBriefView, input: Pick<RepairOutcome, "actual_diagnosis" | "part_used" | "repair_completed" | "second_visit_required">): Promise<RepairBriefView> {
+  if (!brief.id) throw new Error("Save the brief before recording a visit outcome.");
+  const outcome: RepairOutcome = {
+    actual_diagnosis: safeBriefText(input.actual_diagnosis, 300),
+    part_used: safeBriefText(input.part_used, 160),
+    repair_completed: input.repair_completed === true,
+    second_visit_required: input.second_visit_required === true,
+    recorded_at: new Date().toISOString(),
+  };
+  await RepairBrief.update(brief.id, { outcome_json: JSON.stringify(outcome).slice(0, 1200) });
+  return { ...brief, outcome };
 }
 
 export function buildSafeBriefSummary(brief: RepairBriefView, job?: RepairJobRecord): string {
@@ -655,6 +963,14 @@ export function buildSafeBriefSummary(brief: RepairBriefView, job?: RepairJobRec
   if (safeFollowUps.length) safeFollowUps.forEach((followUp) => { const review = reviews.get(followUp.key); const reviewLabel = review ? ` · ${followUpReviewLabel(review.status)}` : ""; lines.push(`- ${followUp.value} · ${evidenceSourceLabel(followUp.source)}${reviewLabel}`); const note = review ? safeBriefText(review.note, LIMITS.followUpReviewNote) : ""; if (note) lines.push(`  Coordinator note (unverified): ${note}`); }); else lines.push("- No specific follow-up details were recorded.");
   lines.push("", "Blockers");
   if (brief.blockers.length) brief.blockers.forEach((blocker) => lines.push(`- ${blocker.value} · ${evidenceSourceLabel(blocker.source)}${blocker.supporting_excerpt ? ` · “${blocker.supporting_excerpt}”` : ""}`)); else lines.push("- None explicitly recorded.");
+  lines.push("", "Visit outcome");
+  if (brief.outcome) {
+    lines.push(`- Repair completed: ${brief.outcome.repair_completed ? "Yes" : "No"} · Second visit required: ${brief.outcome.second_visit_required ? "Yes" : "No"}`);
+    if (brief.outcome.actual_diagnosis) lines.push(`- Actual diagnosis: ${brief.outcome.actual_diagnosis}`);
+    if (brief.outcome.part_used) lines.push(`- Part used: ${brief.outcome.part_used}`);
+  } else {
+    lines.push("- Not recorded yet.");
+  }
   lines.push("", `Human review: ${humanReviewLabel(brief.human_review_state)}`);
   if (brief.human_review_note) lines.push(`Review note: ${brief.human_review_note}`);
   lines.push("", "Coordinator entries are unverified. Follow-up review records human attention only; they do not confirm customer answers or change readiness.");

@@ -84,6 +84,7 @@ function hasText(value: unknown): value is string {
 
 function bounded(value: unknown, max: number): string {
   return typeof value === "string"
+  // eslint-disable-next-line no-control-regex -- deliberately stripping control characters from untrusted text before storage/display.
     ? value.replace(/[\x00-\x1f\x7f]/g, " ").trim().slice(0, max)
     : "";
 }

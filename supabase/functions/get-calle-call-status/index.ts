@@ -35,7 +35,7 @@ function jsonResponse(body: StatusResponse, status: number, origin: string | nul
   return new Response(JSON.stringify(body), { status, headers: { ...corsHeaders(origin), "Cache-Control": "no-store", "Content-Type": "application/json" } });
 }
 function bounded(value: unknown, max: number): string {
-  return typeof value === "string" ? value.replace(/[\x00-\x1f\x7f]/g, " ").trim().slice(0, max) : "";
+  return typeof value === "string" ? value.replace(/[\x00-\x1f\x7f]/g, " ").trim().slice(0, max) : ""; // eslint-disable-line no-control-regex
 }
 function validId(value: unknown): value is string { return typeof value === "string" && value.trim().length > 0 && value.length <= 160; }
 function providerId(value: unknown): string { const id = bounded(value, 160); return PROVIDER_ID_RE.test(id) ? id : ""; }
