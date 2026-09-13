@@ -24,6 +24,7 @@ import {
   isAuthorizedDemoAttempt,
   isCanonicalE164Phone,
   isRemoteCallStatus,
+  isRetryableCallStatus,
   parseQuestionOutline,
   type CallAttemptDraft,
 } from "@/lib/call-attempts";
@@ -66,6 +67,8 @@ interface JobDetailProps {
   dispatchState: "idle" | "loading" | "submitted" | "error";
   dispatchMessage: string;
   onDispatchCall: () => Promise<void>;
+  retryDraftState: "idle" | "loading";
+  onRetryCallDraft: () => Promise<void>;
   shareLinkState: "idle" | "loading" | "error";
   shareLinkMessage: string;
   onCreateShareLink: () => Promise<void>;
@@ -104,6 +107,8 @@ export function JobDetail({
   dispatchState,
   dispatchMessage,
   onDispatchCall,
+  retryDraftState,
+  onRetryCallDraft,
   shareLinkState,
   shareLinkMessage,
   onCreateShareLink,
@@ -253,6 +258,8 @@ export function JobDetail({
             dispatchState={dispatchState}
             dispatchMessage={dispatchMessage}
             onDispatchCall={onDispatchCall}
+            retryDraftState={retryDraftState}
+            onRetryCallDraft={onRetryCallDraft}
             statusRefreshing={demoStatusRefreshing}
             statusMessage={demoStatusMessage}
             onRefreshStatus={onRefreshDemoStatus}
@@ -574,6 +581,8 @@ function CallReviewPanel({
   dispatchState,
   dispatchMessage,
   onDispatchCall,
+  retryDraftState,
+  onRetryCallDraft,
   statusRefreshing,
   statusMessage,
   onRefreshStatus,
@@ -593,6 +602,8 @@ function CallReviewPanel({
   dispatchState: "idle" | "loading" | "submitted" | "error";
   dispatchMessage: string;
   onDispatchCall: () => Promise<void>;
+  retryDraftState: "idle" | "loading";
+  onRetryCallDraft: () => Promise<void>;
   statusRefreshing: boolean;
   statusMessage: string;
   onRefreshStatus: () => Promise<void>;
@@ -814,6 +825,8 @@ function CallReviewPanel({
           dispatchState={dispatchState}
           dispatchMessage={dispatchMessage}
           onDispatchCall={onDispatchCall}
+          retryDraftState={retryDraftState}
+          onRetryCallDraft={onRetryCallDraft}
           statusRefreshing={statusRefreshing}
           statusMessage={statusMessage}
           onRefreshStatus={onRefreshStatus}
@@ -839,6 +852,8 @@ function ApproveAndCallPanel({
   dispatchState,
   dispatchMessage,
   onDispatchCall,
+  retryDraftState,
+  onRetryCallDraft,
   statusRefreshing,
   statusMessage,
   onRefreshStatus,
@@ -858,6 +873,8 @@ function ApproveAndCallPanel({
   dispatchState: "idle" | "loading" | "submitted" | "error";
   dispatchMessage: string;
   onDispatchCall: () => Promise<void>;
+  retryDraftState: "idle" | "loading";
+  onRetryCallDraft: () => Promise<void>;
   statusRefreshing: boolean;
   statusMessage: string;
   onRefreshStatus: () => Promise<void>;
@@ -869,6 +886,7 @@ function ApproveAndCallPanel({
   const alreadySubmitted = Boolean(callDraft.provider_call_id?.trim() || callDraft.provider_status?.trim());
   const last4 = callDraft.recipient_phone?.trim().slice(-4) ?? "";
   const isInFlight = callDraft.provider_status === "queued" || callDraft.provider_status === "in_progress";
+  const isRetryable = !isInFlight && isRetryableCallStatus(callDraft.provider_status);
 
   if (alreadySubmitted) {
     return (
@@ -886,7 +904,9 @@ function ApproveAndCallPanel({
             <p className="mt-1 text-xs leading-relaxed text-foreground/90">
               {isInFlight
                 ? "Checking automatically every ~10 seconds while the call is in progress, matching CALL-E's own recommended polling pattern."
-                : "This draft has saved provider state. Review it in the panel above rather than approving or dispatching again."}
+                : isRetryable
+                  ? "The call did not connect. Nothing was learned from this attempt — you can prepare a new attempt with the same questions below."
+                  : "This draft has saved provider state. Review it in the panel above rather than approving or dispatching again."}
             </p>
           </div>
         </div>
@@ -895,17 +915,32 @@ function ApproveAndCallPanel({
             {statusMessage}
           </p>
         )}
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          onClick={() => void onRefreshStatus()}
-          disabled={statusRefreshing}
-          className="mt-3 border-primary/25 bg-card text-primary hover:bg-primary/10 hover:text-primary"
-        >
-          <RefreshCw className={cn("mr-1.5 h-3.5 w-3.5", statusRefreshing && "animate-spin")} aria-hidden />
-          {statusRefreshing ? "Checking…" : "Check status now"}
-        </Button>
+        <div className="mt-3 flex flex-wrap gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => void onRefreshStatus()}
+            disabled={statusRefreshing}
+            className="border-primary/25 bg-card text-primary hover:bg-primary/10 hover:text-primary"
+          >
+            <RefreshCw className={cn("mr-1.5 h-3.5 w-3.5", statusRefreshing && "animate-spin")} aria-hidden />
+            {statusRefreshing ? "Checking…" : "Check status now"}
+          </Button>
+          {isRetryable && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => void onRetryCallDraft()}
+              disabled={retryDraftState === "loading"}
+              className="border-amber-500/40 bg-card text-amber-900 hover:bg-amber-50 hover:text-amber-950"
+            >
+              <Phone className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+              {retryDraftState === "loading" ? "Preparing retry…" : "Retry this call"}
+            </Button>
+          )}
+        </div>
       </div>
     );
   }

@@ -333,6 +333,59 @@ export async function saveCallAttemptDraft(job: RepairJobRecord): Promise<CallAt
   return asDraft(savedRecord, true);
 }
 
+/** Terminal outcomes where the call never actually connected/completed, so redialing the same
+ * questions (rather than asking a targeted follow-up) is the right next step. */
+export const RETRYABLE_CALL_STATUSES = ["no_answer", "voicemail", "busy"] as const;
+export function isRetryableCallStatus(value: unknown): boolean {
+  return typeof value === "string" && (RETRYABLE_CALL_STATUSES as readonly string[]).includes(value);
+}
+
+/**
+ * Always creates a fresh call_attempts row rather than reusing the prior one, since the prior
+ * attempt already has server-reserved provider state (a terminal no-answer/voicemail/busy result)
+ * and must stay untouched as history. The new draft asks the same original questions — the call
+ * never connected, so there is nothing new to follow up on yet. Approval is deliberately NOT
+ * carried over: the coordinator still re-types and re-confirms the number for the new attempt,
+ * same as any other call. This only saves them from re-entering the purpose/questions from scratch.
+ */
+export async function saveRetryCallAttemptDraft(job: RepairJobRecord): Promise<CallAttemptDraft> {
+  if (!job.id) throw new Error("Select a saved repair job before retrying a call.");
+  if (!safeText(job.customer_name, LIMITS.recipient_name)) {
+    throw new Error("Add a recipient name to the job before retrying a call.");
+  }
+  if (!isCanonicalE164Phone(job.phone)) {
+    throw new Error("Save the job with a canonical +countrycode phone before retrying a call.");
+  }
+
+  const snapshot = buildCallRequestSnapshot(job);
+  const payload = {
+    repair_job_id: job.id,
+    recipient_name: safeText(job.customer_name, LIMITS.recipient_name),
+    recipient_phone: job.phone.trim(),
+    recipient_region: "",
+    recipient_locale: "",
+    preparation_purpose: safeText(callPurposeForJob(job), LIMITS.purpose),
+    question_outline: questionOutlineText(job).slice(0, LIMITS.question_outline),
+    request_snapshot: snapshot.slice(0, LIMITS.request_snapshot),
+    idempotency_key: createIdempotencyKey(),
+    lifecycle_status: "prepared" as const,
+    approval_state: "not_approved" as const,
+    approved_recipient_phone: "",
+    approved_at: "",
+    approval_expires_at: "",
+    provider_call_id: "",
+    provider_status: "",
+    submitted_at: "",
+    completed_at: "",
+    safe_error_category: "",
+    safe_result_summary: "",
+    review_note: "Prepared locally as a retry after the previous call did not connect. It is not approved and has not been submitted.".slice(0, LIMITS.review_note),
+  };
+
+  const created = await CallAttempt.create(payload);
+  return asDraft(created as CallAttemptDraft, true);
+}
+
 export function followUpPurposeForJob(job: RepairJobRecord): string {
   return `Targeted follow-up call for a ${applianceLabel(job.appliance_type).toLowerCase()} job. Resolve only the specific details left unclear from the previous call. Do not diagnose or promise a repair.`;
 }

@@ -55,6 +55,7 @@ import {
   loadCallAttemptDraft,
   saveCallAttemptDraft,
   saveFollowUpCallAttemptDraft,
+  saveRetryCallAttemptDraft,
   type CallAttemptDraft,
 } from "@/lib/call-attempts";
 import {
@@ -447,6 +448,33 @@ const Index = () => {
       const message = friendlyError(err, "Could not prepare the follow-up call. Try again.");
       if (selectedId === target.id) setCallDraftError(message);
       toast({ title: "Follow-up draft was not saved", description: message, variant: "destructive" });
+    } finally {
+      setCallDraftSaving(false);
+    }
+  };
+
+  const handleRetryCallDraft = async () => {
+    const target = selected;
+    if (!target || callDraftSaving) return;
+
+    setCallDraftSaving(true);
+    setCallDraftError(null);
+    setApproveState("idle");
+    setApproveMessage("");
+    setDispatchState("idle");
+    setDispatchMessage("");
+    try {
+      const saved = await saveRetryCallAttemptDraft(target);
+      if (selectedId === target.id) setCallDraft(saved);
+      await refreshReadinessQueue(jobs);
+      toast({
+        title: "Retry prepared",
+        description: "A new draft was saved above with the same questions. Approve it there to place the call again.",
+      });
+    } catch (err) {
+      const message = friendlyError(err, "Could not prepare the retry call. Try again.");
+      if (selectedId === target.id) setCallDraftError(message);
+      toast({ title: "Retry draft was not saved", description: message, variant: "destructive" });
     } finally {
       setCallDraftSaving(false);
     }
@@ -1073,6 +1101,8 @@ const Index = () => {
                     dispatchState={dispatchState}
                     dispatchMessage={dispatchMessage}
                     onDispatchCall={handleDispatchCall}
+                    retryDraftState={callDraftSaving ? "loading" : "idle"}
+                    onRetryCallDraft={handleRetryCallDraft}
                     shareLinkState={shareLinkState}
                     shareLinkMessage={shareLinkMessage}
                     onCreateShareLink={handleCreateShareLink}
