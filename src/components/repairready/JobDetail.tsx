@@ -21,6 +21,7 @@ import {
 } from "@/functions";
 import {
   callPurposeForJob,
+  guessRegionLocaleFromPhone,
   isAuthorizedDemoAttempt,
   isCanonicalE164Phone,
   isRemoteCallStatus,
@@ -630,7 +631,14 @@ function CallReviewPanel({
     setReviewed(false);
     setConfirmPhone("");
     setSafetyChecked(false);
-  }, [job.id, callDraft?.id, callDraft?.updated_at, callDraft?.updated_date]);
+    // Best-effort default from the recipient's calling code -- freely editable below, never
+    // authoritative. Only re-guess when there's nothing already approved for this draft.
+    if (callDraft?.approval_state !== "approved") {
+      const guess = guessRegionLocaleFromPhone(callDraft?.recipient_phone ?? job.phone);
+      setRegion(guess.region);
+      setLocale(guess.locale);
+    }
+  }, [job.id, job.phone, callDraft?.id, callDraft?.updated_at, callDraft?.updated_date, callDraft?.approval_state, callDraft?.recipient_phone]);
 
   return (
     <section className="rr-nonprint-section rr-call-review-panel rr-detail-card rounded-xl border border-border bg-card p-4 shadow-sm sm:p-5">
@@ -1003,6 +1011,9 @@ function ApproveAndCallPanel({
             />
           </div>
         </div>
+        <p className="mt-1.5 text-[10px] leading-relaxed text-amber-900/70">
+          Region and locale are pre-filled from the recipient's country code. Confirm or correct them before approving.
+        </p>
         <label className="mt-3 flex items-start gap-2.5 text-xs text-amber-950">
           <input
             type="checkbox"

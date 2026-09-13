@@ -77,6 +77,30 @@ export function isCanonicalE164Phone(value: string | null | undefined): boolean 
   return typeof value === "string" && CANONICAL_PHONE_RE.test(value);
 }
 
+// Best-effort region/locale guess from an E.164 calling code, so the approval step starts from a
+// sensible default instead of always defaulting to US/en-US regardless of the recipient's actual
+// country. This is only ever a starting point -- the coordinator can freely edit both fields
+// before approving, and CALL-E's own validation of the submitted region/locale is unaffected.
+// Ordered longest-prefix-first so 3- and 2-digit codes are checked before shorter ones that could
+// otherwise shadow them (e.g. "+1" vs "+1" NANP numbers aren't disambiguated further -- this is a
+// convenience default, not authoritative geolocation).
+const CALLING_CODE_REGIONS: ReadonlyArray<[string, string, string]> = [
+  ["971", "AE", "ar-AE"], ["966", "SA", "ar-SA"], ["880", "BD", "bn-BD"], ["234", "NG", "en-NG"],
+  ["86", "CN", "zh-CN"], ["81", "JP", "ja-JP"], ["82", "KR", "ko-KR"], ["91", "IN", "en-IN"],
+  ["92", "PK", "ur-PK"], ["84", "VN", "vi-VN"], ["66", "TH", "th-TH"], ["65", "SG", "en-SG"],
+  ["64", "NZ", "en-NZ"], ["63", "PH", "en-PH"], ["62", "ID", "id-ID"], ["61", "AU", "en-AU"],
+  ["60", "MY", "ms-MY"], ["55", "BR", "pt-BR"], ["52", "MX", "es-MX"], ["49", "DE", "de-DE"],
+  ["46", "SE", "sv-SE"], ["44", "GB", "en-GB"], ["41", "CH", "de-CH"], ["39", "IT", "it-IT"],
+  ["34", "ES", "es-ES"], ["33", "FR", "fr-FR"], ["31", "NL", "nl-NL"], ["27", "ZA", "en-ZA"],
+  ["20", "EG", "ar-EG"], ["1", "US", "en-US"],
+];
+
+export function guessRegionLocaleFromPhone(phone: string | null | undefined): { region: string; locale: string } {
+  const digits = typeof phone === "string" ? phone.replace(/^\+/, "") : "";
+  const match = CALLING_CODE_REGIONS.find(([code]) => digits.startsWith(code));
+  return match ? { region: match[1], locale: match[2] } : { region: "US", locale: "en-US" };
+}
+
 export function isRemoteCallStatus(value: unknown): value is RemoteCallStatus {
   return typeof value === "string" && (REMOTE_CALL_STATUSES as readonly string[]).includes(value);
 }

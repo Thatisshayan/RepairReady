@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { SAFE_DEFAULT_PHONE, normalizePhoneInput, validateJobInput, emptyJobInput, type RepairJobRecord } from "@/lib/repair-jobs";
-import { isCanonicalE164Phone } from "@/lib/call-attempts";
+import { guessRegionLocaleFromPhone, isCanonicalE164Phone } from "@/lib/call-attempts";
 import {
   adaptiveQuestionsForJob,
   applianceSpecificQuestion,
@@ -51,6 +51,27 @@ describe("phone validation", () => {
   it("rejects a job with no phone entered", () => {
     const errors = validateJobInput({ ...emptyJobInput(), phone: "" });
     expect(errors.phone).toBeTruthy();
+  });
+});
+
+describe("guessRegionLocaleFromPhone — approval default, never authoritative", () => {
+  it("guesses GB/en-GB for a UK calling code", () => {
+    expect(guessRegionLocaleFromPhone("+447911123456")).toEqual({ region: "GB", locale: "en-GB" });
+  });
+
+  it("guesses IN/en-IN for an Indian calling code", () => {
+    expect(guessRegionLocaleFromPhone("+919876543210")).toEqual({ region: "IN", locale: "en-IN" });
+  });
+
+  it("does not let a longer overlapping-looking code shadow a shorter distinct one", () => {
+    // +1 (US/NANP) must not be misread as the start of +971 (UAE) or vice versa.
+    expect(guessRegionLocaleFromPhone("+13058347598")).toEqual({ region: "US", locale: "en-US" });
+    expect(guessRegionLocaleFromPhone("+971501234567")).toEqual({ region: "AE", locale: "ar-AE" });
+  });
+
+  it("falls back to US/en-US for an unrecognized or missing calling code", () => {
+    expect(guessRegionLocaleFromPhone("")).toEqual({ region: "US", locale: "en-US" });
+    expect(guessRegionLocaleFromPhone(null)).toEqual({ region: "US", locale: "en-US" });
   });
 });
 
