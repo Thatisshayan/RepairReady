@@ -13,8 +13,16 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
+
+      - name: Update npm
+        # The committed package-lock.json was generated with a newer npm (11.x) than the one
+        # bundled with actions/setup-node's Node images; older npm's stricter `npm ci` validation
+        # then reports optional-dependency entries (e.g. esbuild's platform binaries) as "missing"
+        # even though the lockfile is internally consistent. Matching npm's major version avoids
+        # the false mismatch instead of masking it with `npm install`.
+        run: npm install -g npm@11
 
       - name: Install dependencies
         run: npm ci
