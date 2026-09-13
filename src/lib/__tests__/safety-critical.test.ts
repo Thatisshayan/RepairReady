@@ -3,6 +3,8 @@ import { SAFE_DEFAULT_PHONE, normalizePhoneInput, validateJobInput, emptyJobInpu
 import { isCanonicalE164Phone } from "@/lib/call-attempts";
 import {
   assessReadiness,
+  hasSafetyHazard,
+  isSafetyHazardText,
   isShareLinkActive,
   targetedFollowUpQuestions,
   type BriefFollowUp,
@@ -118,6 +120,41 @@ describe("assessReadiness — the technician-facing readiness decision", () => {
     // expired must never be treated as an implicit "completed" that could mark a job ready.
     const status = assessReadiness(ALL_CONFIRMED, [], "no_answer");
     expect(status).not.toBe("ready_for_technician_review");
+  });
+});
+
+describe("isSafetyHazardText / hasSafetyHazard — flagging a reported hazard, not diagnosing one", () => {
+  it("flags an explicit gas leak report", () => {
+    expect(isSafetyHazardText("customer reported a gas leak near the stove")).toBe(true);
+  });
+
+  it("flags exposed wiring, electrical shock, and fire language", () => {
+    expect(isSafetyHazardText("exposed wiring behind the dryer")).toBe(true);
+    expect(isSafetyHazardText("got an electrical shock touching the panel")).toBe(true);
+    expect(isSafetyHazardText("small fire near the outlet")).toBe(true);
+  });
+
+  it("does not flag ordinary access/logistics blockers", () => {
+    expect(isSafetyHazardText("no elevator access, third floor walk-up")).toBe(false);
+    expect(isSafetyHazardText("dog present, keep in the backyard")).toBe(false);
+    expect(isSafetyHazardText("parking is street-only, no permit needed")).toBe(false);
+  });
+
+  it("is case-insensitive and matches within a longer sentence", () => {
+    expect(isSafetyHazardText("Customer says it SMELLS LIKE BURNING when the dryer runs")).toBe(true);
+  });
+
+  it("hasSafetyHazard checks blockers and reported symptoms, not other evidence areas", () => {
+    const withHazardBlocker = { blockers: [{ value: "gas smell near the unit", source: "call_reported" as const, supporting_excerpt: null }], evidence: ALL_CONFIRMED };
+    expect(hasSafetyHazard(withHazardBlocker)).toBe(true);
+
+    const withHazardSymptom = { blockers: [], evidence: [...ALL_CONFIRMED.slice(0, 4), evidence({ key: "symptoms", value: "sparking when plugged in" })] };
+    expect(hasSafetyHazard(withHazardSymptom)).toBe(true);
+
+    const withHazardInWrongField = { blockers: [], evidence: [...ALL_CONFIRMED.slice(0, 4), evidence({ key: "appliance_identity", value: "gas leak brand of washer" })] };
+    expect(hasSafetyHazard(withHazardInWrongField)).toBe(false);
+
+    expect(hasSafetyHazard({ blockers: [], evidence: ALL_CONFIRMED })).toBe(false);
   });
 });
 

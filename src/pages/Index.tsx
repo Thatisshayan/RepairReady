@@ -94,6 +94,7 @@ const EMPTY_QUEUE_SUMMARY: ReadinessQueueSummary = {
   confirmedEvidenceCount: 0,
   totalEvidenceAreaCount: 0,
   limitedToNewestRecords: false,
+  safetyHazardCount: 0,
 };
 
 const Index = () => {

@@ -83,6 +83,23 @@ const LABELS: Record<EvidenceKey, string> = {
 const LIMITS = { id: 160, evidence: 420, followUp: 180, followUps: 8, followUpJson: 4000, followUpReviewJson: 5000, followUpReviewNote: 240, excerpt: 280, note: 600, summary: 7000 } as const;
 const SENSITIVE_RE = /(?:alarm|security|door|entry|access|gate|building|lock)\s*(?:code|pin|password|passcode)|password|credential/i;
 const PHONE_RE = /(?:\+\d[\d\s().-]{6,}|\b\d(?:[\d\s().-]*\d){6,}\b)/g;
+// Flags call-reported text that describes an immediate safety hazard rather than an ordinary
+// access/logistics blocker, so it can be surfaced distinctly instead of blending in with
+// "no elevator" or "pets present" style blockers. Deliberately narrow and literal (no attempt at
+// diagnosis) -- this only ever changes how existing, already-reported blocker/symptom text is
+// displayed and sorted. It never adds, removes, or infers evidence.
+const SAFETY_HAZARD_RE =
+  /\bgas\s*(leak|smell|odor)\b|\bsmells?\s*(of|like)\s*gas\b|\bcarbon\s*monoxide\b|\bco\s*(detector|alarm)\b|\bsmoke\b|\bfire\b|\bsparking\b|\bspark(s|ed)?\s*(from|out)\b|\bexposed\s*wir(e|ing)\b|\blive\s*wire\b|\belectric(al)?\s*shock\b|\belectrocut\w*\b|\bburning\s*smell\b|\bsmells?\s*(like\s*)?(it'?s\s*)?burning\b|\bflooding\b|\bwater\s*damage\b|\bstanding\s*water\b|\bmold\b/i;
+
+export function isSafetyHazardText(value: string | null | undefined): boolean {
+  return typeof value === "string" && SAFETY_HAZARD_RE.test(value);
+}
+
+/** True when any call-reported blocker or symptom text on this brief describes a safety hazard. */
+export function hasSafetyHazard(brief: Pick<RepairBriefView, "blockers" | "evidence">): boolean {
+  if (brief.blockers.some((blocker) => isSafetyHazardText(blocker.value))) return true;
+  return brief.evidence.some((item) => item.key === "symptoms" && isSafetyHazardText(item.value));
+}
 
 function text(value: unknown, max: number): string {
   return typeof value === "string" ? value.replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, max) : "";

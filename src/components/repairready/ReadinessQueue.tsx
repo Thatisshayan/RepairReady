@@ -105,6 +105,19 @@ export function ReadinessQueue({
           A saved-state view for deciding which repair jobs need attention next. Queue refresh reads saved records only.
         </p>
 
+        {summary.safetyHazardCount > 0 && (
+          <div
+            className="rr-safety-banner flex items-start gap-2 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2.5 text-destructive"
+            role="alert"
+          >
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
+            <p className="text-xs font-semibold leading-relaxed">
+              {summary.safetyHazardCount} job{summary.safetyHazardCount === 1 ? "" : "s"} with a reported safety
+              hazard {summary.safetyHazardCount === 1 ? "is" : "are"} pinned to the top of this queue.
+            </p>
+          </div>
+        )}
+
         <div className="rr-queue-summary grid grid-cols-2 gap-2" aria-label="Readiness queue counts">
           <SummaryCount label="Ready for technician review" count={summary.readyCount} tone="good" />
           <SummaryCount label="Needs follow-up" count={summary.needsFollowUpCount} tone="attention" />
@@ -277,7 +290,14 @@ function QueueCard({ item, active, onSelect }: { item: ReadinessQueueItem; activ
             {appliance}{detailLabel ? ` · ${detailLabel}` : ""}
           </p>
         </div>
-        <span className={cn("rr-status-chip shrink-0", decisionTone(item))}>{item.decision.title}</span>
+        <div className="flex shrink-0 flex-col items-end gap-1">
+          {item.hasSafetyHazard && (
+            <span className="rr-status-chip border-destructive/50 bg-destructive text-destructive-foreground">
+              Safety hazard
+            </span>
+          )}
+          <span className={cn("rr-status-chip shrink-0", decisionTone(item))}>{item.decision.title}</span>
+        </div>
       </div>
 
       <p className="mt-2 text-xs leading-relaxed text-foreground/80">{item.decision.explanation}</p>

@@ -7,6 +7,7 @@ import {
   BRIEF_EVIDENCE_KEYS,
   buildBriefPreview,
   completionLabel,
+  hasSafetyHazard,
   humanReviewLabel,
   readinessDecisionFor,
   readinessMetricsFor,
@@ -80,6 +81,7 @@ export interface ReadinessQueueItem {
   completionLabel: string;
   blockerCount: number;
   blockerText: string | null;
+  hasSafetyHazard: boolean;
   latestActivity: string | null;
   nextAction: string;
 }
@@ -94,6 +96,7 @@ export interface ReadinessQueueSummary {
   confirmedEvidenceCount: number;
   totalEvidenceAreaCount: number;
   limitedToNewestRecords: boolean;
+  safetyHazardCount: number;
 }
 
 export interface ReadinessQueueSnapshot {
@@ -188,6 +191,7 @@ function buildItem(
     completionLabel: completionLabel(brief.call_completion_status),
     blockerCount: metrics.visitBlockers,
     blockerText: firstBlocker,
+    hasSafetyHazard: hasSafetyHazard(brief),
     latestActivity,
     nextAction: decision.nextAction,
   };
@@ -217,11 +221,17 @@ function sortQueueItems(items: ReadinessQueueItem[]): ReadinessQueueItem[] {
     "needs_follow_up",
     "ready_for_technician_review",
   ];
-  return groups.flatMap((group) =>
+  const bucketed = groups.flatMap((group) =>
     items
       .filter((item) => item.readinessBucket === group)
       .sort((a, b) => compareActionableState(a, b) || compareLatestActivity(a, b)),
   );
+  // A reported safety hazard outranks every other signal, including its own readiness bucket --
+  // it needs a human's attention before anything else on the queue, regardless of how complete
+  // the rest of the preparation is.
+  const hazards = bucketed.filter((item) => item.hasSafetyHazard);
+  const rest = bucketed.filter((item) => !item.hasSafetyHazard);
+  return [...hazards, ...rest];
 }
 
 function emptySummary(jobs: RepairJobRecord[]): ReadinessQueueSummary {
@@ -234,6 +244,7 @@ function emptySummary(jobs: RepairJobRecord[]): ReadinessQueueSummary {
     confirmedEvidenceCount: 0,
     totalEvidenceAreaCount: jobs.length * BRIEF_EVIDENCE_AREA_COUNT,
     limitedToNewestRecords: jobs.length >= READINESS_QUEUE_LIMIT,
+    safetyHazardCount: 0,
   };
 }
 
@@ -287,6 +298,7 @@ export async function loadReadinessQueue(
       normalizedJobs.length >= READINESS_QUEUE_LIMIT ||
       (attemptRows as unknown[]).length >= READINESS_QUEUE_LIMIT ||
       (briefRows as unknown[]).length >= READINESS_QUEUE_LIMIT,
+    safetyHazardCount: items.filter((item) => item.hasSafetyHazard).length,
   };
 
   return {
