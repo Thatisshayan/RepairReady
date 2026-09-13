@@ -300,6 +300,8 @@ const Index = () => {
       })
       .catch((err) => {
         if (!active) return;
+        // eslint-disable-next-line no-console -- temporary diagnostic, removed after this debugging session
+        console.log("DEBUG loadCallAttemptDraft error", err);
         setCallDraft(null);
         setCallDraftError(
           friendlyError(err, "Could not load the private preparation draft. Try again.")
