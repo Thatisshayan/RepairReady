@@ -55,6 +55,7 @@ import {
   loadCallAttemptDraft,
   saveCallAttemptDraft,
   saveFollowUpCallAttemptDraft,
+  savePostVisitCallAttemptDraft,
   saveRetryCallAttemptDraft,
   type CallAttemptDraft,
 } from "@/lib/call-attempts";
@@ -475,6 +476,33 @@ const Index = () => {
       const message = friendlyError(err, "Could not prepare the retry call. Try again.");
       if (selectedId === target.id) setCallDraftError(message);
       toast({ title: "Retry draft was not saved", description: message, variant: "destructive" });
+    } finally {
+      setCallDraftSaving(false);
+    }
+  };
+
+  const handleCreatePostVisitDraft = async () => {
+    const target = selected;
+    if (!target || callDraftSaving) return;
+
+    setCallDraftSaving(true);
+    setCallDraftError(null);
+    setApproveState("idle");
+    setApproveMessage("");
+    setDispatchState("idle");
+    setDispatchMessage("");
+    try {
+      const saved = await savePostVisitCallAttemptDraft(target);
+      if (selectedId === target.id) setCallDraft(saved);
+      await refreshReadinessQueue(jobs);
+      toast({
+        title: "Post-visit check-in prepared",
+        description: "A new draft was saved above to confirm the repair and catch any new issue. Approve it there to place the call.",
+      });
+    } catch (err) {
+      const message = friendlyError(err, "Could not prepare the post-visit check-in call. Try again.");
+      if (selectedId === target.id) setCallDraftError(message);
+      toast({ title: "Post-visit draft was not saved", description: message, variant: "destructive" });
     } finally {
       setCallDraftSaving(false);
     }
@@ -1109,6 +1137,8 @@ const Index = () => {
                     onRevokeShareLink={handleRevokeShareLink}
                     followUpDraftState={callDraftSaving ? "loading" : "idle"}
                     onCreateFollowUpDraft={handleCreateFollowUpDraft}
+                    postVisitDraftState={callDraftSaving ? "loading" : "idle"}
+                    onCreatePostVisitDraft={handleCreatePostVisitDraft}
                   />
                 ) : (
                   <EmptyDetail onCreate={openCreate} hasJobs={jobs.length > 0} />

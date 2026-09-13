@@ -437,3 +437,57 @@ export async function saveFollowUpCallAttemptDraft(
   const created = await CallAttempt.create(payload);
   return asDraft(created as CallAttemptDraft, true);
 }
+
+export function postVisitPurposeForJob(job: RepairJobRecord): string {
+  return `Post-visit check-in call for a ${applianceLabel(job.appliance_type).toLowerCase()} job. Confirm whether the reported problem is resolved and note anything new. Do not diagnose or promise further work.`;
+}
+
+const POST_VISIT_QUESTIONS = [
+  "Ask whether the originally reported problem is fully resolved.",
+  "Ask if the appliance is working normally since the visit.",
+  "Ask about any new or different issue that has come up since the visit.",
+  "Ask if the work area and access points (doors, water, power) were left as expected.",
+  "Thank the customer and close the call. Do not diagnose or promise further work.",
+];
+
+/**
+ * Always creates a fresh call_attempts row, same as a targeted follow-up. Unlike a follow-up,
+ * this isn't about resolving something the pre-visit call left unclear -- it's a separate,
+ * later touchpoint after the technician has already been out, so it's gated on the pre-visit
+ * call having completed rather than on any specific unresolved detail.
+ */
+export async function savePostVisitCallAttemptDraft(job: RepairJobRecord): Promise<CallAttemptDraft> {
+  if (!job.id) throw new Error("Select a saved repair job before preparing a post-visit call.");
+  if (!isCanonicalE164Phone(job.phone)) {
+    throw new Error("Save the job with a canonical +countrycode phone before preparing a post-visit call.");
+  }
+
+  const purpose = postVisitPurposeForJob(job);
+  const snapshot = buildCallRequestSnapshot(job, { purpose, questions: POST_VISIT_QUESTIONS });
+  const payload = {
+    repair_job_id: job.id,
+    recipient_name: safeText(job.customer_name, LIMITS.recipient_name),
+    recipient_phone: job.phone.trim(),
+    recipient_region: "",
+    recipient_locale: "",
+    preparation_purpose: safeText(purpose, LIMITS.purpose),
+    question_outline: POST_VISIT_QUESTIONS.join("\n").slice(0, LIMITS.question_outline),
+    request_snapshot: snapshot.slice(0, LIMITS.request_snapshot),
+    idempotency_key: createIdempotencyKey(),
+    lifecycle_status: "prepared" as const,
+    approval_state: "not_approved" as const,
+    approved_recipient_phone: "",
+    approved_at: "",
+    approval_expires_at: "",
+    provider_call_id: "",
+    provider_status: "",
+    submitted_at: "",
+    completed_at: "",
+    safe_error_category: "",
+    safe_result_summary: "",
+    review_note: "Prepared locally as a post-visit check-in call. It is not approved and has not been submitted.".slice(0, LIMITS.review_note),
+  };
+
+  const created = await CallAttempt.create(payload);
+  return asDraft(created as CallAttemptDraft, true);
+}

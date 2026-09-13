@@ -9,6 +9,7 @@ import {
   Link2,
   ListChecks,
   Loader2,
+  Phone,
   Printer,
   ShieldAlert,
   X,
@@ -54,6 +55,8 @@ interface TechnicianBriefProps {
   onRevokeShareLink: () => Promise<void>;
   followUpDraftState: "idle" | "loading";
   onCreateFollowUpDraft: () => Promise<void>;
+  postVisitDraftState: "idle" | "loading";
+  onCreatePostVisitDraft: () => Promise<void>;
 }
 
 export function TechnicianBrief({
@@ -71,6 +74,8 @@ export function TechnicianBrief({
   onRevokeShareLink,
   followUpDraftState,
   onCreateFollowUpDraft,
+  postVisitDraftState,
+  onCreatePostVisitDraft,
 }: TechnicianBriefProps) {
   const [reviewState, setReviewState] = useState<HumanReviewState>("not_reviewed");
   const [reviewNote, setReviewNote] = useState("");
@@ -145,6 +150,31 @@ export function TechnicianBrief({
               </div>
             )}
           </div>
+
+          {brief.call_completion_status === "completed" && (
+            <div className="mt-4 rounded-lg border border-primary/20 bg-primary/5 p-3.5" aria-labelledby="post-visit-title">
+              <div className="flex items-center gap-2"><Phone className="h-4 w-4 text-primary" aria-hidden /><p id="post-visit-title" className="text-sm font-semibold text-foreground">Post-visit check-in</p></div>
+              <p className="mt-1 text-xs leading-relaxed text-foreground/90">
+                Once the technician has been out, prepare a short call to confirm the repair is fixed and catch
+                anything new. It goes through the same approval step (retype the number) as any other call.
+              </p>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => void onCreatePostVisitDraft()}
+                disabled={postVisitDraftState === "loading"}
+                className="mt-2 border-primary/25 bg-card text-primary hover:bg-primary/10 hover:text-primary"
+              >
+                {postVisitDraftState === "loading" ? (
+                  <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" aria-hidden />
+                ) : (
+                  <Phone className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+                )}
+                Prepare post-visit check-in call
+              </Button>
+            </div>
+          )}
 
           <div className="mt-4 rounded-lg border border-border bg-background/70 p-3.5"><div className="flex items-center gap-2"><ShieldAlert className="h-4 w-4 text-amber-700" aria-hidden /><p className="text-sm font-semibold text-foreground">Visit blockers</p></div>{brief.blockers.length ? <ul className="mt-2 space-y-2">{brief.blockers.map((blocker, index) => <li key={`${blocker.value}-${index}`} className="rounded-md border border-amber-500/25 bg-amber-50 px-2.5 py-2 text-sm text-amber-950"><span>{blocker.value}</span><span className="mt-1 block font-mono text-[10px] uppercase tracking-wide text-amber-800/75">{evidenceSourceLabel(blocker.source)}{blocker.supporting_excerpt ? ` · “${blocker.supporting_excerpt}”` : ""}</span></li>)}</ul> : <p className="mt-2 text-xs leading-relaxed text-muted-foreground">No blockers have been explicitly recorded. Missing information is shown above and is not treated as a blocker automatically.</p>}</div>
 

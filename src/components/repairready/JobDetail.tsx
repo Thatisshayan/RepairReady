@@ -75,6 +75,8 @@ interface JobDetailProps {
   onRevokeShareLink: () => Promise<void>;
   followUpDraftState: "idle" | "loading";
   onCreateFollowUpDraft: () => Promise<void>;
+  postVisitDraftState: "idle" | "loading";
+  onCreatePostVisitDraft: () => Promise<void>;
 }
 
 type ConnectionState = "idle" | "checking" | "connected" | "not_connected" | "error";
@@ -115,6 +117,8 @@ export function JobDetail({
   onRevokeShareLink,
   followUpDraftState,
   onCreateFollowUpDraft,
+  postVisitDraftState,
+  onCreatePostVisitDraft,
 }: JobDetailProps) {
   const reduceMotion = useReducedMotion();
   const checklist = preparationChecklist(job);
@@ -280,6 +284,8 @@ export function JobDetail({
             onRevokeShareLink={onRevokeShareLink}
             followUpDraftState={followUpDraftState}
             onCreateFollowUpDraft={onCreateFollowUpDraft}
+            postVisitDraftState={postVisitDraftState}
+            onCreatePostVisitDraft={onCreatePostVisitDraft}
           />
         </div>
 
