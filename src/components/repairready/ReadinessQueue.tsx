@@ -4,6 +4,7 @@ import {
   CircleDashed,
   Clock3,
   Inbox,
+  ListChecks,
   RefreshCw,
   Search,
   ShieldAlert,
@@ -39,6 +40,11 @@ interface ReadinessQueueProps {
   onFilter: (value: ReadinessQueueFilter) => void;
   onRefresh: () => void;
   onCreate: () => void;
+  selectedIds: Set<string>;
+  onToggleSelect: (id: string) => void;
+  onClearSelection: () => void;
+  bulkPreparing: boolean;
+  onPrepareSelected: () => Promise<void>;
 }
 
 const FILTERS: Array<{ id: ReadinessQueueFilter; label: string }> = [
@@ -64,6 +70,11 @@ export function ReadinessQueue({
   onFilter,
   onRefresh,
   onCreate,
+  selectedIds,
+  onToggleSelect,
+  onClearSelection,
+  bulkPreparing,
+  onPrepareSelected,
 }: ReadinessQueueProps) {
   const visibleItems = queueItemsForFilter(items, query, filter);
   const showInitialLoading = loading && !hasLoaded;
@@ -186,6 +197,33 @@ export function ReadinessQueue({
         )}
       </header>
 
+      {selectedIds.size > 0 && (
+        <div className="rr-queue-bulk-bar mx-3.5 mt-3 flex items-center justify-between gap-2 rounded-lg border border-primary/25 bg-primary/5 px-3 py-2.5 sm:mx-4" role="group" aria-label="Bulk actions for selected jobs">
+          <p className="text-xs font-medium text-foreground">
+            {selectedIds.size} job{selectedIds.size === 1 ? "" : "s"} selected
+          </p>
+          <div className="flex shrink-0 gap-1.5">
+            <Button type="button" variant="ghost" size="sm" className="h-8 text-xs" onClick={onClearSelection} disabled={bulkPreparing}>
+              Clear
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              className="h-8 bg-primary text-xs text-primary-foreground hover:bg-primary/90"
+              onClick={() => void onPrepareSelected()}
+              disabled={bulkPreparing}
+            >
+              {bulkPreparing ? (
+                <RefreshCw className="mr-1.5 h-3 w-3 animate-spin" aria-hidden />
+              ) : (
+                <ListChecks className="mr-1.5 h-3 w-3" aria-hidden />
+              )}
+              {bulkPreparing ? "Preparing…" : "Prepare drafts"}
+            </Button>
+          </div>
+        </div>
+      )}
+
       {showStaleWarning && (
         <div className="rr-queue-refresh-warning mx-3.5 mt-3 rounded-lg border border-amber-500/30 bg-amber-50 px-3 py-2.5 sm:mx-4" role="alert">
           <div className="flex items-start gap-2">
@@ -217,9 +255,9 @@ export function ReadinessQueue({
         )}
         {!showInitialLoading && !showInitialError && visibleItems.length > 0 && (
           <div className="space-y-4">
-            <QueueGroup group="blocked" items={visibleItems} selectedId={selectedId} onSelect={onSelect} />
-            <QueueGroup group="needs_follow_up" items={visibleItems} selectedId={selectedId} onSelect={onSelect} />
-            <QueueGroup group="ready_for_technician_review" items={visibleItems} selectedId={selectedId} onSelect={onSelect} />
+            <QueueGroup group="blocked" items={visibleItems} selectedId={selectedId} onSelect={onSelect} selectedIds={selectedIds} onToggleSelect={onToggleSelect} />
+            <QueueGroup group="needs_follow_up" items={visibleItems} selectedId={selectedId} onSelect={onSelect} selectedIds={selectedIds} onToggleSelect={onToggleSelect} />
+            <QueueGroup group="ready_for_technician_review" items={visibleItems} selectedId={selectedId} onSelect={onSelect} selectedIds={selectedIds} onToggleSelect={onToggleSelect} />
           </div>
         )}
       </div>
@@ -241,11 +279,15 @@ function QueueGroup({
   items,
   selectedId,
   onSelect,
+  selectedIds,
+  onToggleSelect,
 }: {
   group: "blocked" | "needs_follow_up" | "ready_for_technician_review";
   items: ReadinessQueueItem[];
   selectedId: string | null;
   onSelect: (id: string) => void;
+  selectedIds: Set<string>;
+  onToggleSelect: (id: string) => void;
 }) {
   const groupItems = items.filter((item) => item.readinessBucket === group);
   if (!groupItems.length) return null;
@@ -263,8 +305,17 @@ function QueueGroup({
       </div>
       <ul className="space-y-2">
         {groupItems.map((item) => (
-          <li key={item.job.id}>
-            <QueueCard item={item} active={item.job.id === selectedId} onSelect={onSelect} />
+          <li key={item.job.id} className="flex items-start gap-2">
+            <input
+              type="checkbox"
+              checked={selectedIds.has(item.job.id)}
+              onChange={() => onToggleSelect(item.job.id)}
+              aria-label={`Select ${item.job.customer_name || "this job"} for a bulk action`}
+              className="mt-3.5 h-4 w-4 shrink-0 rounded border-border text-primary focus:ring-2 focus:ring-ring"
+            />
+            <div className="min-w-0 flex-1">
+              <QueueCard item={item} active={item.job.id === selectedId} onSelect={onSelect} />
+            </div>
           </li>
         ))}
       </ul>

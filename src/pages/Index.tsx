@@ -113,6 +113,8 @@ const Index = () => {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<ReadinessQueueFilter>("all");
+  const [selectedQueueIds, setSelectedQueueIds] = useState<Set<string>>(new Set());
+  const [bulkPreparing, setBulkPreparing] = useState(false);
   const jobsRequestRef = useRef(0);
   const queueRequestRef = useRef(0);
   const [editorOpen, setEditorOpen] = useState(false);
@@ -425,6 +427,52 @@ const Index = () => {
       toast({ title: "Draft was not saved", description: message, variant: "destructive" });
     } finally {
       setCallDraftSaving(false);
+    }
+  };
+
+  const handleToggleQueueSelect = (id: string) => {
+    setSelectedQueueIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const handleClearQueueSelection = () => setSelectedQueueIds(new Set());
+
+  const handlePrepareSelectedDrafts = async () => {
+    if (bulkPreparing || selectedQueueIds.size === 0) return;
+    const targets = jobs.filter((job) => selectedQueueIds.has(job.id));
+    if (!targets.length) return;
+
+    setBulkPreparing(true);
+    let succeeded = 0;
+    const failures: string[] = [];
+    for (const job of targets) {
+      try {
+        const saved = await saveCallAttemptDraft(job);
+        succeeded += 1;
+        if (selectedId === job.id) setCallDraft(saved);
+      } catch (err) {
+        failures.push(`${job.customer_name || "Unnamed customer"}: ${friendlyError(err, "could not be prepared")}`);
+      }
+    }
+    setBulkPreparing(false);
+    setSelectedQueueIds(new Set());
+    await refreshReadinessQueue(jobs);
+
+    if (!failures.length) {
+      toast({
+        title: `${succeeded} preparation draft${succeeded === 1 ? "" : "s"} saved`,
+        description: "Saved privately for review. No one was contacted and no approval was recorded.",
+      });
+    } else {
+      toast({
+        title: `${succeeded} saved, ${failures.length} could not be prepared`,
+        description: failures.slice(0, 3).join(" · "),
+        variant: succeeded ? "default" : "destructive",
+      });
     }
   };
 
@@ -1000,6 +1048,11 @@ const Index = () => {
                   onFilter={setFilter}
                   onRefresh={() => { void loadJobs(); }}
                   onCreate={openCreate}
+                  selectedIds={selectedQueueIds}
+                  onToggleSelect={handleToggleQueueSelect}
+                  onClearSelection={handleClearQueueSelection}
+                  bulkPreparing={bulkPreparing}
+                  onPrepareSelected={handlePrepareSelectedDrafts}
                 />
               </div>
 
@@ -1045,6 +1098,11 @@ const Index = () => {
                     onFilter={setFilter}
                     onRefresh={() => { void loadJobs(); }}
                     onCreate={openCreate}
+                    selectedIds={selectedQueueIds}
+                    onToggleSelect={handleToggleQueueSelect}
+                    onClearSelection={handleClearQueueSelection}
+                    bulkPreparing={bulkPreparing}
+                    onPrepareSelected={handlePrepareSelectedDrafts}
                   />
                 </SheetContent>
               </Sheet>
