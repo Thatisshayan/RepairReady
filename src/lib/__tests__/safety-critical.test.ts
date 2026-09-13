@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { SAFE_DEFAULT_PHONE, normalizePhoneInput, validateJobInput, emptyJobInput } from "@/lib/repair-jobs";
+import { SAFE_DEFAULT_PHONE, normalizePhoneInput, validateJobInput, emptyJobInput, type RepairJobRecord } from "@/lib/repair-jobs";
 import { isCanonicalE164Phone } from "@/lib/call-attempts";
 import {
+  adaptiveQuestionsForJob,
+  applianceSpecificQuestion,
   assessReadiness,
   hasSafetyHazard,
   isSafetyHazardText,
@@ -155,6 +157,42 @@ describe("isSafetyHazardText / hasSafetyHazard — flagging a reported hazard, n
     expect(hasSafetyHazard(withHazardInWrongField)).toBe(false);
 
     expect(hasSafetyHazard({ blockers: [], evidence: ALL_CONFIRMED })).toBe(false);
+  });
+});
+
+describe("applianceSpecificQuestion / adaptiveQuestionsForJob — per-appliance question coverage", () => {
+  it("asks about gas smell specifically for a gas-capable oven/range", () => {
+    expect(applianceSpecificQuestion("oven_range")).toMatch(/gas/i);
+  });
+
+  it("asks about the vent and burning smell specifically for a dryer", () => {
+    expect(applianceSpecificQuestion("dryer")).toMatch(/vent|burning/i);
+  });
+
+  it("has no extra question for an unrecognized/other appliance type", () => {
+    expect(applianceSpecificQuestion("other")).toBeNull();
+  });
+
+  function testJob(overrides: Partial<RepairJobRecord>): RepairJobRecord {
+    return {
+      id: "job-1",
+      customer_name: "Test Customer",
+      phone: SAFE_DEFAULT_PHONE,
+      appliance_type: "other",
+      reported_problem: "",
+      ...overrides,
+    };
+  }
+
+  it("folds the appliance-specific question into the full outline without dropping the trailing safety/review-boundary question", () => {
+    const withAppliance = adaptiveQuestionsForJob(testJob({ appliance_type: "oven_range" }));
+    const without = adaptiveQuestionsForJob(testJob({ appliance_type: "other" }));
+    expect(withAppliance.some((q) => /gas/i.test(q))).toBe(true);
+    // Regression guard: the cap must always be at least (base question count + 1), or the
+    // appliance-specific question silently pushes the final safety-boundary question off the end.
+    expect(withAppliance.length).toBe(without.length + 1);
+    expect(withAppliance.at(-1)).toMatch(/final checklist and review-only boundary/i);
+    expect(without.at(-1)).toMatch(/final checklist and review-only boundary/i);
   });
 });
 

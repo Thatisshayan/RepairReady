@@ -511,11 +511,28 @@ export function callCompletionFromAttempt(attempt?: { provider_status?: string |
   if (attempt?.provider_status === "queued") return "in_progress";
   return normalizeEnum(attempt?.provider_status, CALL_COMPLETION_STATUSES, "not_started");
 }
+const APPLIANCE_SPECIFIC_QUESTIONS: Partial<Record<RepairJobRecord["appliance_type"], string>> = {
+  washing_machine: "Ask whether there is any visible water leak, and if so, whether it comes from the front, the back, or underneath the machine.",
+  dryer: "Ask whether it is a gas or electric dryer, when the lint trap and vent were last cleaned, and whether there is any burning smell when it runs.",
+  dishwasher: "Ask whether there is any visible water leak on the floor around the unit, and whether the drain hose has a high loop or air gap installed.",
+  refrigerator: "Ask what temperature the fridge and freezer sections are currently reading, and whether any food has spoiled.",
+  oven_range: "Ask whether it is gas or electric, and if gas, whether there has ever been a smell of gas near the appliance.",
+};
+
+/** One extra question specific to the appliance category, layered on top of the generic outline
+ * below. Kept in a lookup rather than branching logic so adding another appliance type later is
+ * a one-line addition, not a new code path. */
+export function applianceSpecificQuestion(applianceType: RepairJobRecord["appliance_type"]): string | null {
+  return APPLIANCE_SPECIFIC_QUESTIONS[applianceType] ?? null;
+}
+
 export function adaptiveQuestionsForJob(job: RepairJobRecord): string[] {
   const questions = ["Confirm you are speaking with the intended customer and that they agree to a short preparation conversation. Do not ask for passwords or access codes."];
   questions.push(job.brand?.trim() && job.model?.trim() ? "Read back the saved appliance brand and full model number, then ask the customer to correct either one if needed." : "Ask the customer to read the appliance brand and full model number exactly as shown on the appliance.");
   questions.push("Ask for the symptoms in the customer's own words. If the description is broad, ask one neutral follow-up for what the sound or sensation is like and what the appliance is doing when it starts. Preserve their words and do not suggest a cause or repair.");
   questions.push("Separate the trigger from the operating moment: ask whether it starts while loading or turning the appliance on, then whether it happens during fill, wash, drain, spin, or another clearly described moment, and how consistently.");
+  const applianceQuestion = applianceSpecificQuestion(job.appliance_type);
+  if (applianceQuestion) questions.push(applianceQuestion);
   questions.push(job.error_code?.trim() ? "Read back the saved error code and ask the customer to confirm it or explicitly say that no code is displayed. Never infer none from silence." : "Ask whether an error code is displayed. If none is visible, record an explicit no-error-code answer rather than inferring one.");
   questions.push("Review or ask separately whether the building is a condo or apartment or another type. Capture a floor or unit only when appropriate for the private job, and never request a door, entry, alarm, security code, PIN, password, or credential.");
   questions.push("Ask separately whether an elevator or stairs are needed, whether any route is narrow or restricted, and whether the route to the appliance and the available workspace are clear.");
@@ -525,7 +542,10 @@ export function adaptiveQuestionsForJob(job: RepairJobRecord): string[] {
   questions.push("Ask how concierge registration works, whether advance notice or lead time is required, and whether the technician must bring a business card or other non-sensitive business identification.");
   questions.push("Ask whether the participant explicitly cannot provide access or whether an unresolved requirement would prevent the visit. Put ordinary requirements in access_constraints, unknown details as unknown or incomplete, and only explicit blockers in visit_blockers. If no blocker is explicitly stated, leave visit_blockers empty.");
   questions.push("Final checklist and review-only boundary: verify every material answer is explicit. Record each unresolved or vague material answer as a missing detail and mark the result incomplete or uncertain instead of silently treating it as complete. This outline does not place a call or edit call evidence. Never diagnose, give repair advice, schedule, take payment, or request codes, passwords, credentials, or other sensitive access information.");
-  return questions.slice(0, 13);
+  // Capped at one more than the previous 13 -- exactly enough for the added appliance-specific
+  // question (12 base questions + 1 appliance-specific) without ever truncating the trailing
+  // safety/review-boundary question above, which must always survive the cap.
+  return questions.slice(0, 14);
 }
 
 export function buildBriefPreview(job: RepairJobRecord, attempt?: { id?: string; provider_status?: string | null } | null): RepairBriefView {
