@@ -339,6 +339,8 @@ const Index = () => {
     setBriefError(null);
     loadRepairBrief(selected, callDraft)
       .then((loaded) => {
+        // eslint-disable-next-line no-console -- temporary diagnostic, removed after this debugging session
+        console.log("DEBUG2 loadRepairBrief", { selectedId: selected.id, callDraftId: callDraft?.id, callDraftStatus: callDraft?.provider_status, loadedCompletion: loaded.call_completion_status, loadedConfirmed: loaded.evidence.filter(e=>e.status==="confirmed").length });
         if (requestId === briefRequestRef.current) setBrief(loaded);
       })
       .catch((err) => {
