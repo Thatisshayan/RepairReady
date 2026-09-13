@@ -283,6 +283,8 @@ const Index = () => {
 
   useEffect(() => {
     let active = true;
+    // eslint-disable-next-line no-console -- temporary diagnostic, removed after this debugging session
+    console.log("DEBUG callDraft effect fired", { auth, selectedId, selectedPresent: !!selected, jobsCount: jobs.length });
     if (auth !== "signed_in" || !selected) {
       setCallDraft(null);
       setCallDraftLoading(false);
