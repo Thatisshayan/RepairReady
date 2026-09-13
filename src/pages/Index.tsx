@@ -79,8 +79,7 @@ import {
   type ReadinessQueueSummary,
 } from "@/lib/readiness-queue";
 
-const LOGO =
-  "https://ellprnxjjzatijdxcogk.supabase.co/storage/v1/render/image/public/files/chat-generated-images/project-hs3mxcyvo0w3ipoukjs69/dd3ffcb6-f84e-4cdf-a7cf-918025819099.webp?width=64&resize=contain&quality=80";
+const LOGO = "/brand/logo-mark.jpg";
 
 type AuthState = "loading" | "signed_out" | "signed_in";
 type DemoActionState = "idle" | "loading" | AuthorizedDemoCallStatus;
