@@ -28,3 +28,9 @@ dist-ssr
 
 .vercel
 .env*
+
+# Serena MCP tool config/index (local-only, self-excluding)
+.serena/
+
+# Local audit reports (not part of the public submission)
+*FULLAUDIT.md
