@@ -1,4 +1,4 @@
-import { corsHeaders } from "./_shared/cors.ts";
+import { corsHeaders, isAllowedOrigin } from "./_shared/cors.ts";
 import { ownerIdFromRequest, serviceClient } from "./_shared/auth.ts";
 
 const CANONICAL_PHONE_RE = /^\+[1-9]\d{6,14}$/;
@@ -33,8 +33,8 @@ function hasText(value: unknown): boolean {
 
 Deno.serve(async (req) => {
   const origin = req.headers.get("Origin");
-  // SECURITY: Reject requests without Origin header to prevent CSRF attacks
-  if (!origin) {
+  // SECURITY: Reject requests from a missing or non-allowlisted Origin.
+  if (!isAllowedOrigin(origin)) {
     return jsonResponse({ status: "error", message: "Origin header is required for security." }, 403, null);
   }
   if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: corsHeaders(origin) });
@@ -98,7 +98,12 @@ Deno.serve(async (req) => {
   const approvedAt = new Date();
   const expiresAt = new Date(approvedAt.getTime() + APPROVAL_WINDOW_MS);
 
-  const { error } = await db
+  // SECURITY: Re-assert every precondition already checked above directly in the WHERE clause,
+  // and require an updated row back. This closes the gap between the checks above and this write
+  // (e.g. two concurrent approve calls, or the draft changing state in between) by making the
+  // approval a single atomic conditional update instead of trusting the earlier SELECTs.
+  const previousApprovalState = attempt.approval_state;
+  let updateQuery = db
     .from("call_attempts")
     .update({
       approval_state: "approved",
@@ -108,11 +113,24 @@ Deno.serve(async (req) => {
       recipient_region: region,
       recipient_locale: locale,
     })
-    .eq("id", callAttemptId);
+    .eq("id", callAttemptId)
+    .eq("created_by", ownerId)
+    .eq("lifecycle_status", "prepared");
+  updateQuery = hasText(previousApprovalState)
+    ? updateQuery.eq("approval_state", previousApprovalState)
+    : updateQuery.is("approval_state", null);
+  const { data: updated, error } = await updateQuery.select("id");
 
   if (error) {
     console.error("approve-calle-call persistence failed", error.message);
     return jsonResponse({ status: "error", message: "The approval could not be saved. Try again." }, 500, origin);
+  }
+  if (!updated || updated.length === 0) {
+    return jsonResponse(
+      { status: "error", message: "This draft changed before the approval could be saved. Reload and try again." },
+      409,
+      origin,
+    );
   }
 
   return jsonResponse(

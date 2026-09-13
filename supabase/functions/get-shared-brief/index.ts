@@ -1,4 +1,4 @@
-import { corsHeaders } from "./_shared/cors.ts";
+import { corsHeaders, isAllowedOrigin } from "./_shared/cors.ts";
 import { serviceClient } from "./_shared/auth.ts";
 
 // Deliberately public / unauthenticated — this is the technician-facing read-only view.
@@ -39,8 +39,8 @@ function parseJsonArray(value: unknown): unknown[] {
 
 Deno.serve(async (req) => {
   const origin = req.headers.get("Origin");
-  // SECURITY: Reject requests without Origin header to prevent CSRF attacks
-  if (!origin) {
+  // SECURITY: Reject requests from a missing or non-allowlisted Origin.
+  if (!isAllowedOrigin(origin)) {
     return jsonResponse({ status: "error", message: "Origin header is required for security." }, 403, null);
   }
   if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: corsHeaders(origin) });
