@@ -147,7 +147,31 @@ Deadline: 2026-09-14, 11:45pm SGT — hard cutoff, no grace period.
       `npm run typecheck` and wired it into CI between lint and test — confirmed green on GitHub
       Actions, not just locally.
 
-## Phase 10 — Demo mode, CALL-E contribution, submission (GATED — do not start without explicit go-ahead)
+## Post-Phase-9 push (2026-09-14, user-directed) — six-step task list, run in this order
+1. [~] **Edge-function test coverage** — extract pure logic from each of the 7 Deno edge functions
+   into a sibling `logic.ts` (zero Deno globals in the exported functions, `Deno.serve(...)`
+   guarded behind `if (import.meta.main)`), write `deno test` adversarial tests per function
+   (malformed CALL-E results, prompt-injection-style text through sanitizers, expired/invalid
+   state combos, redaction of phone numbers/credentials). No behavior change to auth, DB queries,
+   RLS-dependent logic, CORS, or approval/dispatch semantics. Split across 3 parallel subagents by
+   file ownership (not by task type, since extraction and testing aren't independent): (A)
+   `dispatch-calle-call` + `run-authorized-demo-call`, (B) `get-calle-call-status` +
+   `calle-webhook`, (C) `approve-calle-call` + `check-calle-connection` + `get-shared-brief`.
+   Coordinator reviews all three diffs together, runs full local verification (lint/typecheck/
+   vitest/deno test), redeploys the 7 functions to Supabase (not auto-deployed from git, unlike
+   Vercel), then a live smoke check (connection check only, not a real call) before marking done.
+2. [ ] **Add more, bounded** — only what step 1's tests or step 5's audit actually surface as a
+   real gap, not new feature scope.
+3. [ ] **UI/UX polish** — informed by step 5's live pass, not guessed at cold.
+4. [ ] **Documentation update** — describe the final state once 1-3 land, not before.
+5. [ ] **Full audit / debugging session** — a real live QA pass (sign-up through call approval)
+   plus a code review pass, looking for what the last two live-test-driven bug finds (duplicate-
+   attempt race, brief-load bug) suggest might still be lurking.
+6. [ ] **Demo prep** — deterministic no-call demo path clearly labeled SIMULATION vs LIVE, script
+   work. **Recording the final video, opening the PR, and submitting remain explicitly gated on
+   the user's separate go-ahead** — this step is preparation only.
+
+## Phase 10 reference — full submission-logistics checklist (unchanged, still gated)
 - [ ] Deterministic no-call demo path, clearly labeled SIMULATION vs LIVE
 - [ ] Package reusable CALL-E contribution (trust-and-safety pattern doc or skill)
 - [ ] Record ≤3 min demo video
