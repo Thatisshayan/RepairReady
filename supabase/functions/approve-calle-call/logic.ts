@@ -14,3 +14,11 @@ export function bounded(value: unknown, max: number): string {
 export function hasText(value: unknown): boolean {
   return typeof value === "string" && value.trim().length > 0;
 }
+
+/** True when a saved approval_expires_at has already passed (or is missing/unparseable, which
+ * is treated as expired rather than as a permanently-valid approval). */
+export function isApprovalExpired(expiresAt: unknown): boolean {
+  const raw = bounded(expiresAt, 80);
+  const parsed = raw ? Date.parse(raw) : NaN;
+  return Number.isNaN(parsed) || parsed <= Date.now();
+}

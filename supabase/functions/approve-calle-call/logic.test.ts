@@ -17,8 +17,25 @@ import {
   REGION_RE,
   bounded,
   hasText,
+  isApprovalExpired,
   validId,
 } from "./logic.ts";
+
+// --- isApprovalExpired ---
+
+Deno.test("isApprovalExpired is false for a timestamp in the future", () => {
+  assertEquals(isApprovalExpired(new Date(Date.now() + 60_000).toISOString()), false);
+});
+
+Deno.test("isApprovalExpired is true for a timestamp in the past", () => {
+  assertEquals(isApprovalExpired(new Date(Date.now() - 60_000).toISOString()), true);
+});
+
+Deno.test("isApprovalExpired treats missing or unparseable input as expired", () => {
+  assertEquals(isApprovalExpired(null), true);
+  assertEquals(isApprovalExpired(""), true);
+  assertEquals(isApprovalExpired("not-a-date"), true);
+});
 
 // --- CANONICAL_PHONE_RE ---
 

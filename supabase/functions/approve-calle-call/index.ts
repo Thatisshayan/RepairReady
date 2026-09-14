@@ -1,6 +1,6 @@
 import { corsHeaders, isAllowedOrigin } from "./_shared/cors.ts";
 import { ownerIdFromRequest, serviceClient } from "./_shared/auth.ts";
-import { APPROVAL_WINDOW_MS, CANONICAL_PHONE_RE, LOCALE_RE, REGION_RE, bounded, hasText, validId } from "./logic.ts";
+import { APPROVAL_WINDOW_MS, CANONICAL_PHONE_RE, LOCALE_RE, REGION_RE, bounded, hasText, isApprovalExpired, validId } from "./logic.ts";
 
 type ApproveResponse = {
   status: "approved" | "error";
@@ -73,7 +73,11 @@ if (import.meta.main) {
   if (attempt.lifecycle_status !== "prepared") {
     return jsonResponse({ status: "error", message: "This preparation draft is not in a state that can be approved." }, 409, origin);
   }
-  if (attempt.approval_state === "approved") {
+  // A still-valid approval must be dispatched or left to expire, not silently replaced. An
+  // expired approval, though, is functionally dead already (dispatch-calle-call itself refuses
+  // an expired one) -- re-approving it is the only recovery path a coordinator has, so allow it
+  // through to the atomic update below instead of permanently blocking on a stale flag.
+  if (attempt.approval_state === "approved" && !isApprovalExpired(attempt.approval_expires_at)) {
     return jsonResponse({ status: "error", message: "This draft is already approved. Dispatch it, or wait for the approval to expire before approving again." }, 409, origin);
   }
   if (hasText(attempt.provider_call_id) || hasText(attempt.provider_status) || hasText(attempt.submitted_at) || hasText(attempt.completed_at) || hasText(attempt.safe_error_category)) {
