@@ -5,7 +5,7 @@ import {
   objectValue, hasOwn, unknownValue, categoryForStatus, failureMessage, completionStatus,
   safeCompletedAt, structuredResult, recipientResult, consentState, evidenceItem, callEvidence,
   callBlockers, safeSummary, parseStored, priorCallEvidence, mergeEvidence, priorCallBlockers,
-  priorCallFollowUps, normalizeReview,
+  priorCallFollowUps, normalizeReview, callTranscript,
   type ProviderStatus, type SafeErrorCategory, type RecordLike,
 } from "./logic.ts";
 
@@ -93,7 +93,8 @@ async function handler(req: Request): Promise<Response> {
       const evidence = mergeEvidence(priorCallEvidence(existing?.evidence_json), incomingEvidence);
       const blockers = incomingBlockers.length ? incomingBlockers : priorCallBlockers(existing?.blockers_json);
       const followUps = followUpsReported ? incomingFollowUps : priorCallFollowUps(existing?.follow_up_json);
-      const payload = { repair_job_id: String(job.id), call_attempt_id: attemptId, call_completion_status: completionStatus(status), readiness_status: "unknown", human_review_state: normalizeReview(existing?.human_review_state), human_review_note: safeValue(existing?.human_review_note, 600), reviewed_at: bounded(existing?.reviewed_at, 80), evidence_json: JSON.stringify(evidence).slice(0, 14000), blockers_json: JSON.stringify(blockers).slice(0, 7000), follow_up_json: JSON.stringify(followUps).slice(0, 4000), safe_summary: summary.slice(0, 7000) };
+      const transcript = callTranscript(body);
+      const payload = { repair_job_id: String(job.id), call_attempt_id: attemptId, call_completion_status: completionStatus(status), readiness_status: "unknown", human_review_state: normalizeReview(existing?.human_review_state), human_review_note: safeValue(existing?.human_review_note, 600), reviewed_at: bounded(existing?.reviewed_at, 80), evidence_json: JSON.stringify(evidence).slice(0, 14000), blockers_json: JSON.stringify(blockers).slice(0, 7000), follow_up_json: JSON.stringify(followUps).slice(0, 4000), safe_summary: summary.slice(0, 7000), transcript_json: transcript.length ? JSON.stringify(transcript).slice(0, 20000) : bounded(existing?.transcript_json, 20000) };
       if (existing?.id) await db.from("repair_briefs").update(payload).eq("id", String(existing.id));
       else await db.from("repair_briefs").insert({ ...payload, created_by: ownerId });
     } catch { briefUpdated = false; }

@@ -4,9 +4,66 @@ import {
   objectValue, hasOwn, unknownValue, categoryForStatus, failureMessage, completionStatus,
   safeCompletedAt, structuredResult, recipientResult, consentState, evidenceItem, callEvidence,
   callBlockers, parseStored, priorCallEvidence, mergeEvidence, priorCallBlockers,
-  priorCallFollowUps, normalizeReview,
+  priorCallFollowUps, normalizeReview, callTranscript,
   type RecordLike,
 } from "./logic.ts";
+
+// ---------------------------------------------------------------------------
+// callTranscript -- CALL-E's own documented recipients[].attempts[].transcript_turns
+// shape: real evidence of what was actually said, not a narrated summary.
+// ---------------------------------------------------------------------------
+
+Deno.test("callTranscript returns [] when no recipient/attempt has transcript turns", () => {
+  assertEquals(callTranscript({}), []);
+  assertEquals(callTranscript({ recipients: [] }), []);
+  assertEquals(callTranscript({ recipients: [{ attempts: [{ transcript_turns: [] }] }] }), []);
+});
+
+Deno.test("callTranscript extracts turns with speaker/text/offset from the first attempt that has them", () => {
+  const body: RecordLike = {
+    recipients: [
+      {
+        attempts: [
+          {
+            transcript_turns: [
+              { offset_seconds: 0, speaker: "bot", text: "Hi, is this Jordan?" },
+              { offset_seconds: 3, speaker: "user", text: "Yes, go ahead." },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+  const turns = callTranscript(body);
+  assertEquals(turns.length, 2);
+  assertEquals(turns[0], { offset_seconds: 0, speaker: "bot", text: "Hi, is this Jordan?" });
+  assertEquals(turns[1], { offset_seconds: 3, speaker: "user", text: "Yes, go ahead." });
+});
+
+Deno.test("callTranscript sanitizes phone numbers and sensitive terms out of turn text", () => {
+  const body: RecordLike = {
+    recipients: [{ attempts: [{ transcript_turns: [
+      { offset_seconds: 1, speaker: "user", text: "Call me back at +13055551234 anytime." },
+      { offset_seconds: 2, speaker: "user", text: "The gate code is 4821." },
+    ] }] }],
+  };
+  const turns = callTranscript(body);
+  // The sensitive-term line (gate code) is dropped entirely by safeValue, not partially redacted.
+  assertEquals(turns.length, 1);
+  assertEquals((turns[0].text as string).includes("+13055551234"), false);
+});
+
+Deno.test("callTranscript defaults an unrecognized speaker to 'unknown' and drops turns with empty text", () => {
+  const body: RecordLike = {
+    recipients: [{ attempts: [{ transcript_turns: [
+      { offset_seconds: 5, speaker: "robot", text: "Hello" },
+      { offset_seconds: 6, speaker: "bot", text: "" },
+    ] }] }],
+  };
+  const turns = callTranscript(body);
+  assertEquals(turns.length, 1);
+  assertEquals(turns[0].speaker, "unknown");
+});
 
 // ---------------------------------------------------------------------------
 // safeValue / safeArray -- these are what stands between an untrusted CALL-E

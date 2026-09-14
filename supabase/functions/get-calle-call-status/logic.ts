@@ -119,6 +119,32 @@ export function callEvidence(result: RecordLike | null, consent: string): Record
 export function callBlockers(result: RecordLike | null): RecordLike[] {
   return safeArray(result?.visit_blockers).map((value) => ({ value, source: "call_reported", supporting_excerpt: null }));
 }
+const TRANSCRIPT_TURN_LIMIT = 60;
+const TRANSCRIPT_TEXT_MAX = 400;
+/** Structured transcript turns for this attempt, straight from CALL-E's own documented
+ * `recipients[].attempts[].transcript_turns` shape -- real evidence of what was actually said,
+ * not a narrated summary. Each turn's text goes through the same sensitive-term/phone scrubbing
+ * as every other call-reported field before it's ever stored. */
+export function callTranscript(body: RecordLike): RecordLike[] {
+  const recipients = Array.isArray(body.recipients) ? body.recipients : [];
+  for (const recipient of recipients) {
+    const attempts = objectValue(recipient)?.attempts;
+    if (!Array.isArray(attempts)) continue;
+    for (const attempt of attempts) {
+      const turns = objectValue(attempt)?.transcript_turns;
+      if (!Array.isArray(turns) || turns.length === 0) continue;
+      return turns.slice(0, TRANSCRIPT_TURN_LIMIT).flatMap((turn) => {
+        const row = objectValue(turn);
+        const text = safeValue(row?.text, TRANSCRIPT_TEXT_MAX);
+        if (!row || !text) return [];
+        const speaker = row.speaker === "bot" || row.speaker === "user" ? row.speaker : "unknown";
+        const offset = typeof row.offset_seconds === "number" && Number.isFinite(row.offset_seconds) ? Math.max(0, Math.floor(row.offset_seconds)) : null;
+        return [{ offset_seconds: offset, speaker, text }];
+      });
+    }
+  }
+  return [];
+}
 export function safeSummary(body: RecordLike, status: ProviderStatus, result: RecordLike | null, consent: string, blockers: RecordLike[], followUps: RecordLike[]): string {
   const parts: string[] = [`Provider status: ${status}.`];
   if (result) parts.push(`Structured preparation fields received: ${callEvidence(result, consent).length} of ${EVIDENCE_KEYS.length}.`);
