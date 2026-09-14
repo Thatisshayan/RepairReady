@@ -148,7 +148,13 @@ Deadline: 2026-09-14, 11:45pm SGT — hard cutoff, no grace period.
       Actions, not just locally.
 
 ## Post-Phase-9 push (2026-09-14, user-directed) — six-step task list, run in this order
-1. [~] **Edge-function test coverage** — extract pure logic from each of the 7 Deno edge functions
+1. [x] **Edge-function test coverage** — DONE (2026-09-14). 141 Deno tests across 6 functions
+   (check-calle-connection deliberately skipped, no extractable pure logic). All 6 changed
+   functions redeployed to Supabase live (versions confirmed bumped) preserving `verify_jwt:
+   false` exactly as before. Live smoke check passed post-redeploy: fresh disposable account,
+   real job creation, real "Check connection" read-only call returned `CONNECTED FOR SETUP`,
+   zero console errors. Test data cleaned up (0 rows everywhere, both smoke accounts deleted).
+   Original plan text preserved below for reference. — extract pure logic from each of the 7 Deno edge functions
    into a sibling `logic.ts` (zero Deno globals in the exported functions, `Deno.serve(...)`
    guarded behind `if (import.meta.main)`), write `deno test` adversarial tests per function
    (malformed CALL-E results, prompt-injection-style text through sanitizers, expired/invalid
