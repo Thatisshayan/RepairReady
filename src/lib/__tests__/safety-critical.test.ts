@@ -394,6 +394,20 @@ describe("deriveDiagnosisHypothesis — bounded, evidence-gated diagnostic reaso
     });
     expect(withoutTiming?.confidence).toBe("low");
   });
+
+  it("matches a rhythmic knocking/noise symptom on a washing machine to a bearing/suspension hypothesis", () => {
+    const job = testJobForDiagnosis({ appliance_type: "washing_machine" });
+    const hypothesis = deriveDiagnosisHypothesis(job, {
+      blockers: [],
+      evidence: [
+        evidence({ key: "symptoms", value: "Rhythmic knocking noise near the drum; otherwise everything is normal." }),
+        evidence({ key: "timing", value: "Occurs during the spin cycle" }),
+      ],
+    });
+    expect(hypothesis).not.toBeNull();
+    expect(hypothesis?.likely_subsystem).toContain("bearing");
+    expect(hypothesis?.candidate_parts.length).toBeGreaterThan(0);
+  });
 });
 
 function outcome(overrides: Partial<RepairOutcome> = {}): RepairOutcome {
