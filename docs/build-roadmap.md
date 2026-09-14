@@ -100,6 +100,18 @@ Deadline: 2026-09-14, 11:45pm SGT — hard cutoff, no grace period.
       just two runs of the same effect) can both resolve into the same `brief` state.
       Test job/data cleaned up afterward (repair_jobs cascade-deleted call_attempts/repair_briefs
       back to 0 rows; both disposable test auth accounts deleted).
+- [x] **Bug fixed (2026-09-13/14).** First attempt (commit `437b6c5`, request-generation counters
+      on the callDraft/brief-loading effects) was a real defensive improvement but addressed the
+      wrong mechanism — verified by reproducing the bug with seeded synthetic data (no real call
+      needed) and finding it hit **100% of the time**, not intermittently, which ruled out a race.
+      Re-diagnosed with targeted logging against the deterministic repro and found the actual
+      cause: `selectJob(id)` unconditionally cleared `callDraft`/`brief` to `null` even when
+      re-selecting the job that was **already** selected — and since the loading effects only
+      re-fetch when `selected` (memoized off `selectedId`) changes reference, a redundant reselect
+      wiped the data and nothing was ever going to reload it. Fixed in commit `9ec39f7`
+      (`selectJob` is now a no-op when `id === selectedId`). Re-ran the identical reproduction
+      4 times fresh after deploying the fix: 4/4 clean, evidence and the new diagnosis hypothesis
+      panel both render correctly. Test data cleaned up again afterward.
 
 ## Phase 9 — CI + testing [mostly done]
 - [x] `.github/workflows/ci.yml`: install, lint, test, build on push/PR to master — confirmed
