@@ -1,5 +1,19 @@
 import { corsHeaders, isAllowedOrigin } from "./_shared/cors.ts";
 import { ownerIdFromRequest, serviceClient } from "./_shared/auth.ts";
+import {
+  RECIPIENT_RESULT_SCHEMA,
+  RESULT_SCHEMA,
+  bounded,
+  buildTask,
+  categoryForStatus,
+  failureMessage,
+  hasText,
+  parseSnapshot,
+  providerId,
+  validId,
+  type DispatchResponse,
+  type SafeErrorCategory,
+} from "./logic.ts";
 
 // Enabled now that approve-calle-call exists to write the approval fields this function checks
 // for (approval_state, approved_recipient_phone, approved_at, approval_expires_at, region,
@@ -7,61 +21,8 @@ import { ownerIdFromRequest, serviceClient } from "./_shared/auth.ts";
 const DISPATCH_ENABLED = true;
 const PROVIDER_URL = "https://api.heycall-e.com/v1/calls";
 const CANONICAL_PHONE_RE = /^\+[1-9]\d{6,14}$/;
-const PROVIDER_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/;
 const REGION_RE = /^[A-Za-z]{2}$/;
 const LOCALE_RE = /^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})?$/;
-
-type SafeErrorCategory = "provider_auth" | "validation" | "rate_or_credit" | "network" | "unexpected";
-type DispatchResponse = {
-  status: "dispatch_locked" | "submitted" | "uncertain_submit" | "error";
-  message: string;
-  safe_error_category?: SafeErrorCategory;
-};
-type Snapshot = Record<string, unknown>;
-
-const RESULT_SCHEMA = {
-  type: "object",
-  additionalProperties: false,
-  properties: {
-    appliance_brand: { type: "string" },
-    appliance_model: { type: "string" },
-    reported_symptoms: { type: "string" },
-    symptom_timing: { type: "string" },
-    error_code: { type: "string" },
-    access_constraints: { type: "array", items: { type: "string" } },
-    visit_blockers: { type: "array", items: { type: "string" } },
-    completion_status: { type: "string", enum: ["complete", "incomplete", "uncertain"] },
-  },
-  required: [
-    "appliance_brand",
-    "appliance_model",
-    "reported_symptoms",
-    "symptom_timing",
-    "error_code",
-    "access_constraints",
-    "visit_blockers",
-    "completion_status",
-  ],
-} as const;
-
-const RECIPIENT_RESULT_SCHEMA = {
-  type: "object",
-  additionalProperties: false,
-  properties: {
-    recipient_identity: { type: "string", enum: ["confirmed", "uncertain", "not_confirmed"] },
-    preparation_consent: { type: "string", enum: ["confirmed", "uncertain", "not_confirmed"] },
-    questions_answered: { type: "boolean" },
-    participant_notes: { type: "array", items: { type: "string" } },
-  },
-  required: ["recipient_identity", "preparation_consent", "questions_answered", "participant_notes"],
-} as const;
-
-const PREPARATION_TASK = [
-  "Conduct a brief pre-visit preparation call for an appliance repair coordinator.",
-  "Collect only factual preparation details: the exact appliance brand and model, reported symptoms and when they occur, any displayed error code, parking, access, pets, workspace constraints, and anything that could block the visit.",
-  "Do not diagnose, recommend repairs, sell, schedule, promise an outcome, or request alarm codes, entry codes, passwords, or other credentials.",
-  "Mark unknown details as unknown and keep answers concise.",
-].join(" ");
 
 function jsonResponse(body: DispatchResponse, status: number, origin: string | null): Response {
   return new Response(JSON.stringify(body), {
@@ -74,60 +35,7 @@ function locked(message: string, origin: string | null, status = 423): Response 
   return jsonResponse({ status: "dispatch_locked", message }, status, origin);
 }
 
-function validId(value: unknown): value is string {
-  return typeof value === "string" && value.trim().length > 0 && value.length <= 160;
-}
-
-function hasText(value: unknown): value is string {
-  return typeof value === "string" && value.trim().length > 0;
-}
-
-function bounded(value: unknown, max: number): string {
-  return typeof value === "string"
-  // eslint-disable-next-line no-control-regex -- deliberately stripping control characters from untrusted text before storage/display.
-    ? value.replace(/[\x00-\x1f\x7f]/g, " ").trim().slice(0, max)
-    : "";
-}
-
-function parseSnapshot(value: unknown): Snapshot | null {
-  const raw = bounded(value, 8000);
-  if (!raw) return null;
-  try {
-    const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Snapshot) : null;
-  } catch {
-    return null;
-  }
-}
-
-function providerId(value: unknown): string {
-  const id = bounded(value, 160);
-  return PROVIDER_ID_RE.test(id) ? id : "";
-}
-
-function categoryForStatus(status: number): SafeErrorCategory {
-  if (status === 401 || status === 403) return "provider_auth";
-  if (status === 400 || status === 422) return "validation";
-  if (status === 402 || status === 429) return "rate_or_credit";
-  return "unexpected";
-}
-
-function failureMessage(category: SafeErrorCategory): string {
-  if (category === "provider_auth") return "CALL-E did not accept the saved provider authorization. No call status was created.";
-  if (category === "validation") return "CALL-E rejected the prepared request. Review the saved preparation details before any future action.";
-  if (category === "rate_or_credit") return "CALL-E could not accept the request because of a rate or account-credit limit. Review the provider account before any future action.";
-  if (category === "network") return "The provider request outcome could not be confirmed. Do not retry automatically; review the private draft first.";
-  return "CALL-E returned an unexpected provider response. Do not retry automatically; review the private draft first.";
-}
-
-function snapshotValue(snapshot: Snapshot, key: string, max: number): string {
-  return bounded(snapshot[key], max) || "Not recorded";
-}
-
-function buildTask(snapshot: Snapshot): string {
-  return `${PREPARATION_TASK}\n\nSaved job context:\n- Appliance: ${snapshotValue(snapshot, "appliance", 80)}\n- Brand: ${snapshotValue(snapshot, "brand", 80)}\n- Model: ${snapshotValue(snapshot, "model", 100)}\n- Reported problem: ${snapshotValue(snapshot, "reported_problem", 500)}\n- Symptom timing: ${snapshotValue(snapshot, "symptom_timing", 220)}\n- Error code: ${snapshotValue(snapshot, "error_code", 50)}\n- Visit note: ${snapshotValue(snapshot, "visit_note", 420)}\n- Access notes were entered: ${snapshot.access_notes_present === true ? "yes" : "no"}`.slice(0, 3000);
-}
-
+if (import.meta.main) {
 Deno.serve(async (req) => {
   const origin = req.headers.get("Origin");
   // SECURITY: Reject requests from a missing or non-allowlisted Origin.
@@ -301,3 +209,4 @@ Deno.serve(async (req) => {
 
   return jsonResponse({ status: "submitted", message: "CALL-E accepted the preparation request and the private attempt is queued. No automatic status refresh is active." }, 200, origin);
 });
+}

@@ -1,10 +1,6 @@
 import { corsHeaders, isAllowedOrigin } from "./_shared/cors.ts";
 import { ownerIdFromRequest, serviceClient } from "./_shared/auth.ts";
-
-const CANONICAL_PHONE_RE = /^\+[1-9]\d{6,14}$/;
-const REGION_RE = /^[A-Za-z]{2}$/;
-const LOCALE_RE = /^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})?$/;
-const APPROVAL_WINDOW_MS = 15 * 60 * 1000;
+import { APPROVAL_WINDOW_MS, CANONICAL_PHONE_RE, LOCALE_RE, REGION_RE, bounded, hasText, validId } from "./logic.ts";
 
 type ApproveResponse = {
   status: "approved" | "error";
@@ -19,19 +15,8 @@ function jsonResponse(body: ApproveResponse, status: number, origin: string | nu
   });
 }
 
-function validId(value: unknown): value is string {
-  return typeof value === "string" && value.trim().length > 0 && value.length <= 160;
-}
-
-function bounded(value: unknown, max: number): string {
-  return typeof value === "string" ? value.trim().slice(0, max) : "";
-}
-
-function hasText(value: unknown): boolean {
-  return typeof value === "string" && value.trim().length > 0;
-}
-
-Deno.serve(async (req) => {
+if (import.meta.main) {
+  Deno.serve(async (req) => {
   const origin = req.headers.get("Origin");
   // SECURITY: Reject requests from a missing or non-allowlisted Origin.
   if (!isAllowedOrigin(origin)) {
@@ -142,4 +127,5 @@ Deno.serve(async (req) => {
     200,
     origin,
   );
-});
+  });
+}

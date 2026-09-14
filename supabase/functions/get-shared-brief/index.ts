@@ -1,10 +1,6 @@
 import { corsHeaders, isAllowedOrigin } from "./_shared/cors.ts";
 import { serviceClient } from "./_shared/auth.ts";
-
-// Deliberately public / unauthenticated — this is the technician-facing read-only view.
-// It must never return anything beyond the small allowlisted, already-sanitized fields below:
-// no phone numbers, no coordinator's private review note, no ids, no owner information.
-const TOKEN_RE = /^[A-Za-z0-9_-]{20,80}$/;
+import { TOKEN_RE, parseJsonArray } from "./logic.ts";
 
 type SharedBriefResponse = {
   status: "ok" | "not_found" | "expired" | "error";
@@ -27,17 +23,8 @@ function jsonResponse(body: SharedBriefResponse, status: number, origin: string 
   });
 }
 
-function parseJsonArray(value: unknown): unknown[] {
-  if (typeof value !== "string" || !value.trim()) return [];
-  try {
-    const parsed = JSON.parse(value);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
-}
-
-Deno.serve(async (req) => {
+if (import.meta.main) {
+  Deno.serve(async (req) => {
   const origin = req.headers.get("Origin");
   // SECURITY: Reject requests from a missing or non-allowlisted Origin.
   if (!isAllowedOrigin(origin)) {
@@ -92,4 +79,5 @@ Deno.serve(async (req) => {
     200,
     origin,
   );
-});
+  });
+}

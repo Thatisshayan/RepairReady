@@ -1,4 +1,5 @@
 import { serviceClient } from "./_shared/auth.ts";
+import { providerId, providerStatus, safeCompletedAt, EVENT_ID_RE } from "./logic.ts";
 
 // SECURITY: CALL-E's published webhook spec documents no signature verification for this
 // endpoint, so everything received here -- the event id, the event type, and especially the
@@ -17,34 +18,12 @@ import { serviceClient } from "./_shared/auth.ts";
 // readiness queue reflects reality immediately, even before a coordinator opens the job. Full
 // evidence still populates the normal way the next time get-calle-call-status runs for that job.
 const PROVIDER_URL = "https://api.heycall-e.com/v1/calls";
-const PROVIDER_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/;
-const EVENT_ID_RE = /^evt_[A-Za-z0-9_-]+$/;
-const REMOTE_STATUSES = ["queued", "in_progress", "completed", "failed", "canceled", "no_answer", "declined", "voicemail", "busy", "expired"] as const;
-type ProviderStatus = (typeof REMOTE_STATUSES)[number];
 
 function jsonResponse(body: Record<string, unknown>, status: number): Response {
   return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json", "Cache-Control": "no-store" } });
 }
-function bounded(value: unknown, max: number): string {
-  return typeof value === "string" ? value.trim().slice(0, max) : "";
-}
-function providerId(value: unknown): string {
-  const id = bounded(value, 160);
-  return PROVIDER_ID_RE.test(id) ? id : "";
-}
-function providerStatus(value: unknown): ProviderStatus | null {
-  if (typeof value !== "string") return null;
-  const normalized = value.trim().toLowerCase().replace(/^cancelled$/, "canceled");
-  return (REMOTE_STATUSES as readonly string[]).includes(normalized) ? (normalized as ProviderStatus) : null;
-}
-function safeCompletedAt(body: Record<string, unknown>, status: ProviderStatus): string | null {
-  if (!["completed", "failed", "canceled", "no_answer", "declined", "voicemail", "busy", "expired"].includes(status)) return null;
-  const raw = bounded(body.completed_at, 80);
-  const parsed = Date.parse(raw);
-  return raw && !Number.isNaN(parsed) ? new Date(parsed).toISOString() : null;
-}
 
-Deno.serve(async (req) => {
+async function handler(req: Request): Promise<Response> {
   if (req.method !== "POST") return jsonResponse({ status: "error", message: "Use POST." }, 405);
 
   const eventId = req.headers.get("CALL-E-Event-Id");
@@ -100,4 +79,8 @@ Deno.serve(async (req) => {
   if (error) return jsonResponse({ status: "error", message: "The confirmed status could not be saved." }, 502);
 
   return jsonResponse({ status: "ok", message: "Status refreshed from a confirmed provider lookup." }, 200);
-});
+}
+
+if (import.meta.main) {
+  Deno.serve(handler);
+}

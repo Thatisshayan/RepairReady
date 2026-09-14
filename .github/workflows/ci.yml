@@ -23,6 +23,10 @@ jobs:
           node-version: 22
           cache: npm
 
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
       - name: Update npm
         # The committed package-lock.json was generated with a newer npm (11.x) than the one
         # bundled with actions/setup-node's Node images; older npm's stricter `npm ci` validation
@@ -42,6 +46,9 @@ jobs:
 
       - name: Test
         run: npm test
+
+      - name: Edge function tests (Deno)
+        run: deno test supabase/functions/*/logic.test.ts
 
       - name: Build
         run: npm run build
