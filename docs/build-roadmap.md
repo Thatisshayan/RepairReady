@@ -15,9 +15,10 @@ Deadline: 2026-09-14, 11:45pm SGT — hard cutoff, no grace period.
 ## Phase 1 — Reconnaissance + DB reproducibility
 - [x] Inspect actual repo structure, stack, existing tests/CI/security posture
 - [x] Introspect live Supabase schema (tables, RLS policies, indexes, FKs)
-- [x] Write `supabase/migrations/0001_init_snapshot.sql` (schema reproducibility snapshot)
-- [x] Write `supabase/migrations/0002_diagnosis_evidence.sql` (additive `diagnosis_json` column)
-- [ ] User go-ahead to actually apply migrations 0001/0002 live (currently drafted, not applied)
+- [x] Write `supabase/migrations/0001_init_snapshot.sql` (schema reproducibility snapshot,
+      documentation-only, matches live state — never applied, never needed to be)
+- [x] `0002_repair_outcome.sql` and `0003_one_prepared_attempt_per_job.sql` applied live
+      (2026-09-13/14, user go-ahead given) — see Phase 7/8 for what they enabled
 
 ## Phase 2 — Adaptive diagnostic interview engine [x]
 - [x] Replace static `adaptiveQuestionsForJob` ordering with real branching: safety-relevant and

@@ -163,7 +163,7 @@ function createIdempotencyKey(): string {
 
 async function listDrafts(jobId: string): Promise<CallAttemptDraft[]> {
   const rows = await CallAttempt.filter({ repair_job_id: jobId }, "-updated_date", 20);
-  return ((rows as CallAttemptDraft[]) ?? []).filter((row) => Boolean(row?.id));
+  return ((rows as unknown as CallAttemptDraft[]) ?? []).filter((row) => Boolean(row?.id));
 }
 
 function asDraft(row: CallAttemptDraft, isCurrent: boolean): CallAttemptDraft {
@@ -362,8 +362,8 @@ export async function saveCallAttemptDraft(job: RepairJobRecord): Promise<CallAt
     ? await CallAttempt.update(existing.id, payload)
     : await CallAttempt.create(payload);
   const savedRecord = existing
-    ? ({ ...existing, ...(saved as CallAttemptDraft) } as CallAttemptDraft)
-    : (saved as CallAttemptDraft);
+    ? ({ ...existing, ...(saved as unknown as CallAttemptDraft) } as CallAttemptDraft)
+    : (saved as unknown as CallAttemptDraft);
   return asDraft(savedRecord, true);
 }
 
@@ -420,7 +420,7 @@ export async function saveRetryCallAttemptDraft(job: RepairJobRecord): Promise<C
   };
 
   const created = await CallAttempt.create(payload);
-  return asDraft(created as CallAttemptDraft, true);
+  return asDraft(created as unknown as CallAttemptDraft, true);
 }
 
 export function followUpPurposeForJob(job: RepairJobRecord): string {
@@ -475,7 +475,7 @@ export async function saveFollowUpCallAttemptDraft(
   };
 
   const created = await CallAttempt.create(payload);
-  return asDraft(created as CallAttemptDraft, true);
+  return asDraft(created as unknown as CallAttemptDraft, true);
 }
 
 export function postVisitPurposeForJob(job: RepairJobRecord): string {
@@ -532,5 +532,5 @@ export async function savePostVisitCallAttemptDraft(job: RepairJobRecord): Promi
   };
 
   const created = await CallAttempt.create(payload);
-  return asDraft(created as CallAttemptDraft, true);
+  return asDraft(created as unknown as CallAttemptDraft, true);
 }

@@ -260,7 +260,7 @@ export function hasMissingInfo(job: RepairJobRecord): boolean {
 export async function listRepairJobs(): Promise<RepairJobRecord[]> {
   // SDK list sort examples use *_date aliases (e.g. -updated_date).
   const rows = await RepairJob.list("-updated_date", 200);
-  return (rows as RepairJobRecord[]) ?? [];
+  return (rows as unknown as RepairJobRecord[]) ?? [];
 }
 
 export function jobUpdatedAt(job: RepairJobRecord): string | undefined {
@@ -275,7 +275,7 @@ export async function createRepairJob(input: RepairJobInput): Promise<RepairJobR
     throw err;
   }
   const created = await RepairJob.create(toPayload(input));
-  return created as RepairJobRecord;
+  return created as unknown as RepairJobRecord;
 }
 
 export async function updateRepairJob(
@@ -289,7 +289,7 @@ export async function updateRepairJob(
     throw err;
   }
   const updated = await RepairJob.update(id, toPayload(input));
-  return updated as RepairJobRecord;
+  return updated as unknown as RepairJobRecord;
 }
 
 export async function deleteRepairJob(id: string): Promise<void> {

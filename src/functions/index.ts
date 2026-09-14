@@ -7,7 +7,7 @@ export interface CalleConnectionResult {
   message: string;
 }
 
-async function invoke<T>(name: string, body: Record<string, unknown>): Promise<T> {
+async function invoke<T>(name: string, body: object): Promise<T> {
   const { data, error } = await supabase.functions.invoke(name, { body });
   if (error) throw error;
   return data as T;
