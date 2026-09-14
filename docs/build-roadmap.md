@@ -128,17 +128,24 @@ Deadline: 2026-09-14, 11:45pm SGT — hard cutoff, no grace period.
       starts green, not red, on its first run
 - [x] Adversarial tests added: contradictory coordinator-vs-call answers, safety-hazard phrasing
       across categories, symptom not call-confirmed (abstention), unmatched symptom (abstention)
-- [ ] **Known gap, not done:** edge-function-level adversarial tests (expired approval, duplicate
-      dispatch, malformed CALL-E result, prompt-injection-style customer text at the Deno function
-      layer) — the 7 Supabase Edge Functions have zero test coverage of any kind today (confirmed
-      in both the 2026-09-12 audit and this session's recon) and there's no Deno test harness
-      wired up. This is a real, non-trivial addition, not a quick fix — flagging honestly rather
-      than skipping silently or claiming it's covered.
-- [ ] Pre-existing TypeScript errors found in `call-attempts.ts`, `repair-jobs.ts`,
-      `functions/index.ts` (unrelated to this session's changes, predate it) — no `typecheck`
-      script exists and none is wired into CI yet, so these are currently invisible. Left
-      unfixed and out of CI deliberately to avoid scope creep this close to the deadline; flagging
-      so it isn't mistaken for "everything type-checks."
+- [ ] **Known gap, deliberately not attempted:** edge-function-level adversarial tests (expired
+      approval, duplicate dispatch, malformed CALL-E result, prompt-injection-style customer text
+      at the Deno function layer). Investigated the actual cost: every one of the 7 functions
+      calls `Deno.serve(...)` unconditionally at module load, so a Node/vitest test can't import
+      the file at all without a `ReferenceError: Deno is not defined` — the only real path is
+      either (a) standing up an actual Deno test runner in CI (new toolchain, not a quick add), or
+      (b) refactoring each function to split its pure/testable logic out from the `Deno.serve`
+      handler first. Given this is the same dispatch/approval/webhook code this session just
+      verified working end-to-end against a real live CALL-E call, refactoring it for testability
+      this close to the deadline is a real-work-breaking-real-work risk, not a quick win. Leaving
+      this gap explicitly open rather than doing it under time pressure — see conversation for the
+      recommendation given to the user at this decision point.
+- [x] Fixed the 13 pre-existing TypeScript errors in `call-attempts.ts`, `repair-jobs.ts`, and
+      `functions/index.ts` (loosened the `invoke<T>` helper's body param to `object` instead of
+      forcing every edge-function input shape into `Record<string, unknown>`; routed 9 entity-
+      wrapper `Row → X` casts through `as unknown as X`, TS's own suggested fix). Added
+      `npm run typecheck` and wired it into CI between lint and test — confirmed green on GitHub
+      Actions, not just locally.
 
 ## Phase 10 — Demo mode, CALL-E contribution, submission (GATED — do not start without explicit go-ahead)
 - [ ] Deterministic no-call demo path, clearly labeled SIMULATION vs LIVE
