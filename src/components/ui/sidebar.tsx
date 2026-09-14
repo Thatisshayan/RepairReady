@@ -757,5 +757,6 @@ export {
   SidebarRail,
   SidebarSeparator,
   SidebarTrigger,
+  // eslint-disable-next-line react-refresh/only-export-components -- shadcn: useSidebar is a hook used alongside sidebar components
   useSidebar,
 }

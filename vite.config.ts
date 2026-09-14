@@ -23,5 +23,7 @@ export default defineConfig({
     // to collect them. Scoping to src/ explicitly rather than only excluding supabase/ so any
     // future non-src test location doesn't silently get picked up either.
     include: ["src/**/*.{test,spec}.{ts,tsx}"],
+    environment: "jsdom",
+    setupFiles: ["./src/test-setup.ts"],
   },
 });

@@ -33,4 +33,5 @@ function Badge({ className, variant, ...props }: BadgeProps) {
   )
 }
 
+// eslint-disable-next-line react-refresh/only-export-components -- shadcn: badgeVariants is a variant helper, not a component
 export { Badge, badgeVariants }

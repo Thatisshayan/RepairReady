@@ -718,7 +718,7 @@ const Index = () => {
     }
   };
 
-  const handleRefreshDemoStatus = async (auto = false) => {
+  const handleRefreshDemoStatus = useCallback(async (auto = false) => {
     const target = selected;
     const attempt = callDraft;
     if (demoStatusRefreshing) return;
@@ -767,7 +767,7 @@ const Index = () => {
       await refreshReadinessQueue(jobs);
       setDemoStatusRefreshing(false);
     }
-  };
+  }, [selected, callDraft, demoStatusRefreshing, selectedId, jobs, refreshReadinessQueue, toast]);
 
   // Auto-poll while a dispatched call is still in flight, matching CALL-E's own recommended
   // polling cadence. Self-terminating: once the refreshed draft's status is no longer
@@ -778,7 +778,7 @@ const Index = () => {
     if (!isNonTerminalCallStatus(callDraft.provider_status)) return;
     const timeoutId = setTimeout(() => { void handleRefreshDemoStatus(true); }, 10000);
     return () => clearTimeout(timeoutId);
-  }, [callDraft, demoStatusRefreshing]);
+  }, [callDraft, demoStatusRefreshing, handleRefreshDemoStatus]);
 
   const handleApproveCall = async (confirmedPhone: string, region: string, locale: string) => {
     const target = selected;
