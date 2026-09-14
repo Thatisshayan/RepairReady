@@ -1,0 +1,45 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Agent file-write staging area (applied and cleaned by the platform)
+.tmp
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+.vercel
+.env*
+
+# Serena MCP tool config/index (local-only, self-excluding)
+.serena/
+
+# Local audit reports (not part of the public submission)
+*FULLAUDIT.md
+
+# Comprehensive internal status doc (not part of the public submission)
+docs/INTERNAL-STATUS.md
+
+# Internal build journal -- bug traces, process narrative, not part of the public submission
+docs/build-roadmap.md
+
+# Prep text for a PR to be opened elsewhere -- our own draft, not part of this repo's submission
+docs/pr-draft.md

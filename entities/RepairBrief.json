@@ -1,0 +1,62 @@
+{
+  "name": "RepairBrief",
+  "description": "Private technician brief snapshot owned by the coordinator. Evidence is minimized and bounded, with source and status labels. JSON fields contain no raw transcript, phone number in share text, credentials, security codes, provider response, diagnosis, or repair recommendation.",
+  "properties": {
+    "repair_job_id": {
+      "type": "string",
+      "description": "ID of the owner-created RepairJob this current brief belongs to"
+    },
+    "call_attempt_id": {
+      "type": "string",
+      "description": "ID of the related private CallAttempt when one exists; empty before local preparation"
+    },
+    "call_completion_status": {
+      "type": "string",
+      "description": "Bounded call completion state such as not_started, in_progress, completed, failed, canceled, or unknown"
+    },
+    "readiness_status": {
+      "type": "string",
+      "description": "Truthful business-readiness assessment: blocked, needs_follow_up, unknown, or ready_for_technician_review"
+    },
+    "human_review_state": {
+      "type": "string",
+      "description": "Separate owner review state: not_reviewed, reviewed, or needs_follow_up"
+    },
+    "human_review_note": {
+      "type": "string",
+      "description": "Bounded owner review note only, scrubbed for phone details and security-code language"
+    },
+    "reviewed_at": {
+      "type": "string",
+      "description": "ISO timestamp for the latest owner review state, or empty when not reviewed"
+    },
+    "evidence_json": {
+      "type": "string",
+      "description": "Bounded JSON array of the five required evidence items with allowlisted key, source, status, value, and optional excerpt; no raw transcript or secret data"
+    },
+    "blockers_json": {
+      "type": "string",
+      "description": "Bounded JSON array of explicitly reported visit blockers with source and optional excerpt; never inferred from missing data"
+    },
+    "follow_up_json": {
+      "type": "string",
+      "maxLength": 4000,
+      "description": "Bounded JSON array of explicit unresolved material details reported by the call, with source call_reported; no raw transcript, phone number, credential, or security code"
+    },
+    "follow_up_review_json": {
+      "type": "string",
+      "maxLength": 5000,
+      "description": "Private bounded coordinator review metadata for current call-reported follow-ups only, matched by sanitized item key and value; stores open or reviewed status and an unverified short note"
+    },
+    "safe_summary": {
+      "type": "string",
+      "description": "Bounded generated copy-safe summary with phone details omitted and coordinator content labeled unverified"
+    }
+  },
+  "rls": {
+    "create": { "created_by": "{{user.email}}" },
+    "read": { "created_by": "{{user.email}}" },
+    "update": { "created_by": "{{user.email}}" },
+    "delete": { "created_by": "{{user.email}}" }
+  }
+}

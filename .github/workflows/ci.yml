@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    env:
+      # Publishable client identifiers, not secrets -- same values already committed in
+      # .env.example and protected server-side by RLS, not by being hidden. Needed because
+      # src/lib/supabase/client.ts throws at import time (a deliberate fail-fast, not something
+      # to work around) if these are unset, and that import is reached by the test/build steps.
+      VITE_SUPABASE_URL: https://pgcubmjosgfnqrwftosj.supabase.co
+      VITE_SUPABASE_PUBLISHABLE_KEY: sb_publishable_sRSnH3ezd-SiZYI7RBC5qA_IpwPGZAK
+      # Placeholder only -- the 555 exchange is reserved for fiction in North America. The real
+      # default lives only in Vercel's production environment, never committed.
+      VITE_SAFE_DEFAULT_PHONE: "+15550199999"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Update npm
+        # The committed package-lock.json was generated with a newer npm (11.x) than the one
+        # bundled with actions/setup-node's Node images; older npm's stricter `npm ci` validation
+        # then reports optional-dependency entries (e.g. esbuild's platform binaries) as "missing"
+        # even though the lockfile is internally consistent. Matching npm's major version avoids
+        # the false mismatch instead of masking it with `npm install`.
+        run: npm install -g npm@11
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      - name: Edge function tests (Deno)
+        run: deno test supabase/functions/*/logic.test.ts
+
+      - name: Build
+        run: npm run build

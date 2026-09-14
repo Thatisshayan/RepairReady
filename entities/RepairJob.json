@@ -1,0 +1,60 @@
+{
+  "name": "RepairJob",
+  "description": "Private appliance-repair job draft owned by a coordinator. Operator-entered preparation data only; no call evidence or customer-confirmed results.",
+  "properties": {
+    "demo_marker": {
+      "type": "string",
+      "description": "Server-controlled marker for the one authorized RepairReady demonstration; empty for ordinary jobs"
+    },
+    "customer_name": {
+      "type": "string",
+      "description": "Customer full name as entered by the coordinator"
+    },
+    "phone": {
+      "type": "string",
+      "description": "Customer phone in international +country format (E.164-style)"
+    },
+    "appliance_type": {
+      "type": "string",
+      "description": "Appliance category: washing_machine, dryer, dishwasher, refrigerator, oven_range, or other"
+    },
+    "brand": {
+      "type": "string",
+      "description": "Appliance brand if known"
+    },
+    "model": {
+      "type": "string",
+      "description": "Appliance model if known"
+    },
+    "reported_problem": {
+      "type": "string",
+      "description": "Problem description as reported to the coordinator"
+    },
+    "symptom_timing": {
+      "type": "string",
+      "description": "When the symptom occurs, if known"
+    },
+    "error_code": {
+      "type": "string",
+      "description": "Displayed error code if any"
+    },
+    "visit_note": {
+      "type": "string",
+      "description": "Existing appointment or visit notes. Free text, not a booking system."
+    },
+    "access_notes": {
+      "type": "string",
+      "description": "Access, parking, pets, or workspace notes. Never store alarm or entry codes."
+    },
+    "operator_notes": {
+      "type": "string",
+      "description": "Internal coordinator notes"
+    }
+  },
+  "rls": {
+    "create": { "created_by": "{{user.email}}" },
+    "read": { "created_by": "{{user.email}}" },
+    "update": { "created_by": "{{user.email}}" },
+    "delete": { "created_by": "{{user.email}}" }
+  }
+}

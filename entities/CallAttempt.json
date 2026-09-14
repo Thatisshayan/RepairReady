@@ -1,0 +1,100 @@
+{
+  "name": "CallAttempt",
+  "description": "Private call-preparation record owned by a coordinator. Local draft fields support review; approval and provider lifecycle fields are server-reserved and never represent a remote action until a separately authorized phase.",
+  "properties": {
+    "demo_marker": {
+      "type": "string",
+      "description": "Server-controlled marker for the one authorized RepairReady demonstration; empty for ordinary preparation drafts"
+    },
+    "repair_job_id": {
+      "type": "string",
+      "description": "ID of the owner-created RepairJob this preparation record belongs to"
+    },
+    "recipient_name": {
+      "type": "string",
+      "description": "Recipient name copied from the selected repair job for local review"
+    },
+    "recipient_phone": {
+      "type": "string",
+      "description": "Canonical recipient phone copied from the saved repair job, in +countrycode and digits format"
+    },
+    "recipient_region": {
+      "type": "string",
+      "description": "Provider recipient region reserved for an explicitly approved dispatch; empty in local preparation drafts and never guessed by the browser"
+    },
+    "recipient_locale": {
+      "type": "string",
+      "description": "Provider recipient locale reserved for an explicitly approved dispatch; empty in local preparation drafts and never guessed by the browser"
+    },
+    "preparation_purpose": {
+      "type": "string",
+      "description": "Local purpose statement for the proposed preparation conversation; no diagnosis, sales, scheduling, or promise"
+    },
+    "question_outline": {
+      "type": "string",
+      "description": "Serialized local question outline for review, with one question per line"
+    },
+    "request_snapshot": {
+      "type": "string",
+      "description": "Serialized, minimized snapshot of the saved operator-entered preparation context used for review and any future server request; no secrets, transcripts, or provider response"
+    },
+    "idempotency_key": {
+      "type": "string",
+      "description": "Durable local request key reserved for one future provider submission; generated once for this preparation record"
+    },
+    "lifecycle_status": {
+      "type": "string",
+      "description": "Local prepared label or a server-recorded provider lifecycle state; local draft saving may only write prepared"
+    },
+    "approval_state": {
+      "type": "string",
+      "description": "Approval state reserved for server authorization. Local preparation saving may only write not_approved and cannot authorize a real call"
+    },
+    "approved_recipient_phone": {
+      "type": "string",
+      "description": "Server-reserved exact recipient phone approved for one future test call; empty in preparation drafts"
+    },
+    "approved_at": {
+      "type": "string",
+      "description": "Server-reserved timestamp for explicit approval; empty in preparation drafts"
+    },
+    "approval_expires_at": {
+      "type": "string",
+      "description": "Server-reserved expiry timestamp for explicit approval; empty in preparation drafts"
+    },
+    "provider_call_id": {
+      "type": "string",
+      "description": "Server-reserved CALL-E call identifier saved only after a provider submission is accepted; empty in preparation drafts"
+    },
+    "provider_status": {
+      "type": "string",
+      "description": "Server-reserved sanitized CALL-E lifecycle state such as queued, in_progress, completed, failed, or canceled; empty in preparation drafts"
+    },
+    "submitted_at": {
+      "type": "string",
+      "description": "Server-reserved timestamp recorded only after a provider call identifier is accepted; empty in preparation drafts"
+    },
+    "completed_at": {
+      "type": "string",
+      "description": "Server-reserved provider completion timestamp when returned and safely validated; empty in preparation drafts"
+    },
+    "safe_error_category": {
+      "type": "string",
+      "description": "Server-reserved bounded category for a sanitized provider or persistence failure; never raw response text"
+    },
+    "safe_result_summary": {
+      "type": "string",
+      "description": "Server-reserved bounded summary of safe result metadata only, never a transcript, phone number, credential, or raw provider response"
+    },
+    "review_note": {
+      "type": "string",
+      "description": "Safe local review or error note; never a provider response, transcript, access code, or secret"
+    }
+  },
+  "rls": {
+    "create": { "created_by": "{{user.email}}" },
+    "read": { "created_by": "{{user.email}}" },
+    "update": { "created_by": "{{user.email}}" },
+    "delete": { "created_by": "{{user.email}}" }
+  }
+}
