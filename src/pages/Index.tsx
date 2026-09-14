@@ -339,8 +339,6 @@ const Index = () => {
     setBriefError(null);
     loadRepairBrief(selected, callDraft)
       .then((loaded) => {
-        // eslint-disable-next-line no-console -- temporary diagnostic, removed after this debugging session
-        console.log("DEBUG2 loadRepairBrief", { selectedId: selected.id, callDraftId: callDraft?.id, callDraftStatus: callDraft?.provider_status, loadedCompletion: loaded.call_completion_status, loadedConfirmed: loaded.evidence.filter(e=>e.status==="confirmed").length });
         if (requestId === briefRequestRef.current) setBrief(loaded);
       })
       .catch((err) => {
@@ -881,6 +879,14 @@ const Index = () => {
   };
 
   const selectJob = (id: string) => {
+    setMobileListOpen(false);
+    // Re-selecting the job that's already open must be a no-op for callDraft/brief: the loading
+    // effects below only re-fetch when `selected` (memoized off selectedId) actually changes, so
+    // unconditionally clearing callDraft/brief here left them permanently blank after a redundant
+    // click on the current job -- nothing was ever going to reload them since selectedId wasn't
+    // changing. Reproduced live: the technician brief for a genuinely completed call rendered as
+    // an empty "0/5, not started" preview after re-selecting the job it belonged to.
+    if (id === selectedId) return;
     setCallDraft(null);
     setCallDraftError(null);
     setCallDraftLoading(false);
@@ -895,7 +901,6 @@ const Index = () => {
     setShareLinkState("idle");
     setShareLinkMessage("");
     setSelectedId(id);
-    setMobileListOpen(false);
   };
 
   const demoActionInProgress = demoActionState === "loading";
