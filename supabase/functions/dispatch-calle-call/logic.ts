@@ -50,6 +50,7 @@ export const PREPARATION_TASK = [
   "Greet the participant using the saved recipient name in the context below and confirm you are speaking with them, or with someone else who can help with the appliance issue at this location. If neither is available, thank them and end politely.",
   "Early in the call, tell the participant this call may be recorded for quality and training purposes, and that the details they share may be used to prepare a preliminary, non-binding assessment for the technician to verify in person -- not a diagnosis, a repair commitment, or a scheduled appointment.",
   "Collect only factual preparation details: the exact appliance brand and model, reported symptoms and when they occur, any displayed error code, parking, access, pets, workspace constraints, and anything that could block the visit.",
+  "If the customer does not know or cannot find the exact model number, do not treat this as a blocker: ask for the brand alone if known, one distinguishing detail such as color, size, or door style, and record that the model still needs on-site verification, then continue with the rest of the call.",
   "Do not diagnose, recommend repairs, sell, schedule, promise an outcome, or request alarm codes, entry codes, passwords, or other credentials.",
   "Mark unknown details as unknown and keep answers concise.",
 ].join(" ");

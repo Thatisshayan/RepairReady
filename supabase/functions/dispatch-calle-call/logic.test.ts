@@ -173,3 +173,10 @@ Deno.test("buildTask always discloses recording and preliminary-assessment use",
   assertEquals(task.includes("may be recorded for quality and training purposes"), true);
   assertEquals(task.includes("preliminary, non-binding assessment"), true);
 });
+
+Deno.test("buildTask tells the agent how to handle an unknown model number instead of treating it as a blocker", () => {
+  const task = buildTask({});
+  assertEquals(task.includes("does not know or cannot find the exact model number"), true);
+  assertEquals(task.includes("do not treat this as a blocker"), true);
+  assertEquals(task.includes("on-site verification"), true);
+});
