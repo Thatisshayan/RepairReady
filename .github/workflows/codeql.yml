@@ -58,6 +58,11 @@ jobs:
     steps:
     - name: Checkout repository
       uses: actions/checkout@v7
+      with:
+        # This job never pushes back to the repo and never uploads the workspace as an
+        # artifact, so the checked-out GITHUB_TOKEN doesn't need to persist in .git/config
+        # for the rest of the job -- avoids the token leaking via any future artifact upload.
+        persist-credentials: false
 
     # Add any setup steps before running the `github/codeql-action/init` action.
     # This includes steps like installing compilers or runtimes (`actions/setup-node`
